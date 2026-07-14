@@ -10,12 +10,42 @@
 #include <netcode.hpp>
 #define _USE_MATH_DEFINES
 #include <math.h>
+#include <algorithm>
+#include <cctype>
 #include "../npcs_impl.hpp"
 #include "../utils.hpp"
 #include "../Path/path.hpp"
 #include "../Playback/playback.hpp"
 #include "../Node/node.hpp"
 #include <Server/Components/Vehicles/vehicle_seats.hpp>
+
+namespace
+{
+Impl::String normalisedAnimationKey(StringView lib, StringView name)
+{
+	Impl::String fullName(lib);
+	fullName += Impl::String(":");
+	fullName += Impl::String(name);
+	std::transform(fullName.begin(), fullName.end(), fullName.begin(), [](unsigned char c)
+		{
+			return std::toupper(c);
+		});
+	return fullName;
+}
+
+int animationIdFor(StringView lib, StringView name)
+{
+	const Impl::String wanted = normalisedAnimationKey(lib, name);
+	for (int i = 1; i < GLM_COUNTOF(AnimationNames); ++i)
+	{
+		if (wanted == AnimationNames[i])
+		{
+			return i;
+		}
+	}
+	return 0;
+}
+}
 
 NPC::NPC(NPCComponent* component, IPlayer* playerPtr)
 	: footSyncSkipUpdate_(0)
@@ -1213,13 +1243,15 @@ void NPC::shoot(int hitId, PlayerBulletHitType hitType, uint8_t weapon, const Ve
 		{
 			auto npc = static_cast<NPC*>(npcComponent_->get(bulletData.hitID));
 			if (npc)
-			{
-				if (!dead_ && !invulnerable_)
 				{
-					bool eventResult = npcComponent_->emulatePlayerGiveDamageToNPCEvent(*player_, *npc, WeaponDamages[bulletData.weapon], weapon, BodyPart_Torso, true);
-					npc->processDamage(player_, WeaponDamages[bulletData.weapon], bulletData.weapon, BodyPart_Torso, eventResult);
+					if (!dead_ && !invulnerable_)
+					{
+						const float baseDamage = bulletData.weapon < MAX_WEAPON_ID ? WeaponDamages[bulletData.weapon] : 0.0f;
+						const float damage = normaliseNPCDamage(baseDamage, bulletData.weapon);
+					bool eventResult = npcComponent_->emulatePlayerGiveDamageToNPCEvent(*player_, *npc, damage, bulletData.weapon, BodyPart_Torso, true);
+					npc->processDamage(player_, damage, bulletData.weapon, BodyPart_Torso, eventResult);
 
-					npcComponent_->emulatePlayerTakeDamageFromNPCEvent(*npc->getPlayer(), *this, WeaponDamages[bulletData.weapon], weapon, BodyPart_Torso, true);
+					npcComponent_->emulatePlayerTakeDamageFromNPCEvent(*npc->getPlayer(), *this, damage, bulletData.weapon, BodyPart_Torso, true);
 				}
 			}
 		}
@@ -1271,6 +1303,8 @@ void NPC::aimAt(const Vector3& point, bool shoot, int shootDelay, bool setAngle,
 
 	// Set the inBetween mode and flags
 	betweenCheckFlags_ = betweenCheckFlags;
+
+	updateAim();
 }
 
 void NPC::aimAtPlayer(IPlayer& atPlayer, bool shoot, int shootDelay, bool setAngle, const Vector3& offset, const Vector3& offsetFrom, EntityCheckType betweenCheckFlags)
@@ -1745,11 +1779,23 @@ void NPC::getAnimation(int& animationId, float& delta, bool& loop, bool& lockX, 
 void NPC::applyAnimation(const AnimationData& animationData)
 {
 	player_->applyAnimation(animationData, PlayerAnimationSyncType_Sync);
+	auto animationDataApplied = player_->getAnimationData();
+	if (animationDataApplied.ID == 0)
+	{
+		const int animationId = animationIdFor(animationData.lib, animationData.name);
+		if (animationId > 0)
+		{
+			setAnimation(animationId, animationData.delta, animationData.loop, animationData.lockX, animationData.lockY, animationData.freeze, animationData.time);
+			return;
+		}
+	}
+	setAnimation(animationDataApplied.ID, animationDataApplied.flags);
 }
 
 void NPC::clearAnimations()
 {
 	player_->clearAnimations(PlayerAnimationSyncType_Sync);
+	resetAnimation();
 }
 
 void NPC::setSpecialAction(PlayerSpecialAction action)
@@ -2045,7 +2091,7 @@ void NPC::kill(IPlayer* killer, uint8_t weapon)
 
 void NPC::processDamage(IPlayer* damager, float damage, uint8_t weapon, BodyPart bodyPart, bool handleHealthAndArmour)
 {
-	if (!damager)
+	if (!damager || dead_)
 	{
 		return;
 	}
@@ -2053,22 +2099,38 @@ void NPC::processDamage(IPlayer* damager, float damage, uint8_t weapon, BodyPart
 	// Check the returned value
 	if (handleHealthAndArmour)
 	{
+		const float appliedDamage = normaliseNPCDamage(damage, weapon);
+		const float oldHealth = getHealth();
+		const float oldArmour = getArmour();
+
 		// Check the armour
 		if (getArmour() > 0.0f)
 		{
 			// Save the old armour
 			float armour = getArmour();
 			// Decrease the armor
-			setArmour(armour - damage);
+			setArmour(armour - appliedDamage);
 			// If the damage is bigger than the armour then decrease the health aswell
-			if (armour - damage < 0.0f)
+			if (armour - appliedDamage < 0.0f)
 			{
-				setHealth(getHealth() - (damage - armour));
+				setHealth(getHealth() - (appliedDamage - armour));
 			}
 		}
 		else
 		{
-			setHealth(getHealth() - damage);
+			setHealth(getHealth() - appliedDamage);
+		}
+
+		if (npcComponent_ && npcComponent_->getCore())
+		{
+			npcComponent_->getCore()->logLn(LogLevel::Debug,
+				"[NPC] damage id=%d damager=%d weapon=%u body=%d amount=%.2f applied=%.2f armour=%.2f->%.2f health=%.2f->%.2f",
+				getID(), damager->getID(), unsigned(weapon), int(bodyPart), damage, appliedDamage, oldArmour, getArmour(), oldHealth, getHealth());
+		}
+
+		if (oldHealth > 0.0f && getHealth() <= 0.0f)
+		{
+			kill(damager, weapon);
 		}
 	}
 
@@ -2116,10 +2178,10 @@ void NPC::updateAim()
 		// Convert the player angle to radians
 
 		float angle = glm::radians(player_->getRotation().ToEuler().z);
-		// Calculate the camera target
-		Vector3 vecTarget(aimSync_.CamPos.x - glm::sin(angle) * 0.2f,
-			aimSync_.CamPos.z + glm::cos(angle) * 0.2f,
-			aimSync_.CamPos.z);
+			// Calculate the camera target
+			Vector3 vecTarget(aimSync_.CamPos.x - glm::sin(angle) * 0.2f,
+				aimSync_.CamPos.y + glm::cos(angle) * 0.2f,
+				aimSync_.CamPos.z);
 
 		// Calculate the camera front vector
 		aimSync_.CamFrontVector = vecTarget - aimSync_.CamPos;
@@ -2421,8 +2483,9 @@ void NPC::sendPassengerSync()
 
 void NPC::sendAimSync()
 {
-	// Only send aim sync if player is on foot
-	if (player_->getState() != PlayerState_OnFoot)
+	// Newly spawned NPCs can briefly remain in Spawned until their first foot sync;
+	// aim sync still needs to be emitted so weapon pose/rotation appear immediately.
+	if (player_->getState() != PlayerState_OnFoot && player_->getState() != PlayerState_Spawned)
 	{
 		return;
 	}
@@ -2844,6 +2907,8 @@ void NPC::tick(Microseconds elapsed, TimePoint now)
 							Vector3 currentPlayerPos = followingPlayer_->getPosition();
 							Vector3 npcPos = getPosition();
 							float distanceToPlayer = glm::distance(npcPos, currentPlayerPos);
+							float targetDelta = glm::distance(targetPosition_, currentPlayerPos);
+							float retargetDistance = std::max(0.35f, followStopRange_ * 0.35f);
 
 							// If player moved outside stop range, start moving again (if autoRestart is enabled)
 							if (distanceToPlayer > followStopRange_)
@@ -2853,7 +2918,7 @@ void NPC::tick(Microseconds elapsed, TimePoint now)
 									// Restart movement to follow player
 									move(currentPlayerPos, followMoveType_, followMoveSpeed_, followStopRange_);
 								}
-								else if (moving_)
+								else if (moving_ && targetDelta > retargetDistance)
 								{
 									// Update target position to player's current position and recall move for angle update too
 									move(currentPlayerPos, followMoveType_, followMoveSpeed_, followStopRange_);
@@ -3127,8 +3192,8 @@ void NPC::tick(Microseconds elapsed, TimePoint now)
 
 			if (duration_cast<Milliseconds>(now - lastAimSyncUpdate_).count() > npcComponent_->getAimSyncRate())
 			{
-				sendAimSync();
 				updateAim();
+				sendAimSync();
 
 				lastAimSyncUpdate_ = now;
 			}
