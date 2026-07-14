@@ -554,6 +554,11 @@ private:
 	// count with modulo so the NPC keeps a stable lane while the road widens/narrows.
 	int nodeLanePreference_;
 
+	// Car steering state: current facing in GTA degrees, slewed toward the move target at
+	// a bounded yaw rate so driven vehicles arc through turns instead of snap-rotating.
+	float driveHeadingDeg_;
+	bool driveHeadingValid_;
+
 	Vector3 nodeTargetWithLaneOffset(uint16_t fromPointId, uint16_t toPointId, Vector3 targetPosition) const;
 
 	NPCComponent* npcComponent_;

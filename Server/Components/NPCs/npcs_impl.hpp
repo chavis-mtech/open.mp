@@ -242,6 +242,11 @@ public:
 		return laneWidth != nullptr ? *laneWidth : 5.0f;
 	}
 
+	float getDriveYawRateDegPerSec() const
+	{
+		return driveYawRate != nullptr ? *driveYawRate : 80.0f;
+	}
+
 	void provideConfiguration(ILogger& logger, IEarlyConfig& config, bool defaults) override
 	{
 		int defaultGeneralNPCUpdateRateMS = 50;
@@ -251,11 +256,14 @@ public:
 		bool defaultLaneDrivingEnabled = true;
 		// GTA SA's own car AI spaces traffic lanes ~5 units apart around the path node line.
 		float defaultLaneWidth = 5.0f;
+		// Max steering slew for driven NPCs, degrees of facing change per second.
+		float defaultDriveYawRate = 80.0f;
 
 		if (defaults)
 		{
 			config.setBool("npc.lane_driving", defaultLaneDrivingEnabled);
 			config.setFloat("npc.lane_width", defaultLaneWidth);
+			config.setFloat("npc.drive_yaw_rate", defaultDriveYawRate);
 			config.setInt("npc.process_update_rate", defaultGeneralNPCUpdateRateMS);
 			config.setInt("npc.on_foot_sync_rate", *config.getInt("network.on_foot_sync_rate"));
 			config.setInt("npc.in_vehicle_sync_rate", *config.getInt("network.in_vehicle_sync_rate"));
@@ -311,6 +319,11 @@ public:
 			{
 				config.setFloat("npc.lane_width", defaultLaneWidth);
 			}
+
+			if (config.getType("npc.drive_yaw_rate") == ConfigOptionType_None)
+			{
+				config.setFloat("npc.drive_yaw_rate", defaultDriveYawRate);
+			}
 		}
 
 		generalNPCUpdateRateMS = config.getInt("npc.process_update_rate");
@@ -322,6 +335,7 @@ public:
 		aimSyncSkipUpdateLimit = config.getInt("npc.aim_sync_skip_update_limit");
 		laneDrivingEnabled = config.getBool("npc.lane_driving");
 		laneWidth = config.getFloat("npc.lane_width");
+		driveYawRate = config.getFloat("npc.drive_yaw_rate");
 	}
 
 private:
@@ -345,6 +359,9 @@ private:
 	// Node-graph lane driving
 	bool* laneDrivingEnabled = nullptr;
 	float* laneWidth = nullptr;
+
+	// Car steering slew rate
+	float* driveYawRate = nullptr;
 
 	// Components
 	IVehiclesComponent* vehicles = nullptr;

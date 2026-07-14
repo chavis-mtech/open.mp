@@ -133,6 +133,8 @@ NPC::NPC(NPCComponent* component, IPlayer* playerPtr)
 	, nodeSetAngle_(true)
 	, nodeLastPosition_(Vector3(0.0f, 0.0f, 0.0f))
 	, nodeLanePreference_(-1)
+	, driveHeadingDeg_(0.0f)
+	, driveHeadingValid_(false)
 {
 	// Fill weapon accuracy with 1.0f, let server devs change it with the desired values
 	weaponAccuracy_.fill(1.0f);
@@ -231,6 +233,8 @@ void NPC::setPosition(const Vector3& pos, bool immediateUpdate)
 
 	// Setting position right after removing from vehicle because removeFromVehicle also sets position
 	position_ = pos;
+	// A teleport invalidates any steering continuity.
+	driveHeadingValid_ = false;
 
 	if (immediateUpdate)
 	{
@@ -248,6 +252,7 @@ void NPC::setVehiclePosition(const Vector3& position, bool immediateUpdate)
 	if (vehicle_ && vehicleSeat_ != SEAT_NONE)
 	{
 		position_ = position;
+		driveHeadingValid_ = false;
 		if (immediateUpdate)
 		{
 			if (vehicleSeat_ == 0) // driver
@@ -529,9 +534,23 @@ bool NPC::move(Vector3 pos, NPCMoveType moveType, float moveSpeed, float stopRan
 	if (distance > FLT_EPSILON)
 	{
 		front = (pos - position) / distance;
-		auto rotation = getRotation().ToEuler();
-		rotation.z = getAngleOfLine(front.x, front.y);
-		rotation_ = GTAQuat(rotation); // Do this directly, if you use NPC::setRotation it's going to cause recursion
+		if (moveType_ == NPCMoveType_Drive && player_->getState() == PlayerState_Driver)
+		{
+			// Car steering: keep the current facing here; advance() slews it toward the
+			// target every tick so the vehicle arcs into turns instead of snap-rotating.
+			if (!driveHeadingValid_)
+			{
+				driveHeadingDeg_ = getRotation().ToEuler().z;
+				driveHeadingValid_ = true;
+			}
+		}
+		else
+		{
+			auto rotation = getRotation().ToEuler();
+			rotation.z = getAngleOfLine(front.x, front.y);
+			rotation_ = GTAQuat(rotation); // Do this directly, if you use NPC::setRotation it's going to cause recursion
+			driveHeadingValid_ = false;
+		}
 
 		// Calculate velocity to use on tick
 		velocity_ = front * (moveSpeed_ / 100.0f);
@@ -2652,8 +2671,56 @@ void NPC::advance(TimePoint now)
 		if (distanceToTarget > FLT_EPSILON)
 		{
 			auto direction = toTarget / distanceToTarget;
-			auto travelled = direction * velocityLength * deltaTimeMS;
-			position_ = position + travelled;
+			if (moveType_ == NPCMoveType_Drive && driveHeadingValid_ && velocityLength > FLT_EPSILON)
+			{
+				// Steer like a car: slew the facing toward the target at a bounded yaw
+				// rate, slow down through the turn, and travel along the facing so the
+				// vehicle arcs through corners instead of pivoting on the spot.
+				const float desiredDeg = getAngleOfLine(direction.x, direction.y);
+				float errorDeg = desiredDeg - driveHeadingDeg_;
+				while (errorDeg > 180.0f)
+				{
+					errorDeg -= 360.0f;
+				}
+				while (errorDeg < -180.0f)
+				{
+					errorDeg += 360.0f;
+				}
+
+				float yawRateDegPerSec = npcComponent_->getDriveYawRateDegPerSec();
+				// A close target far off the nose would make a rate-limited car orbit it
+				// forever; pivot faster instead so the waypoint is still consumed.
+				if (distanceToTarget < 8.0f && fabs(errorDeg) > 90.0f)
+				{
+					yawRateDegPerSec *= 3.0f;
+				}
+				const float maxStepDeg = yawRateDegPerSec * deltaTimeSEC;
+				driveHeadingDeg_ += std::clamp(errorDeg, -maxStepDeg, maxStepDeg);
+				while (driveHeadingDeg_ >= 360.0f)
+				{
+					driveHeadingDeg_ -= 360.0f;
+				}
+				while (driveHeadingDeg_ < 0.0f)
+				{
+					driveHeadingDeg_ += 360.0f;
+				}
+
+				// Brake through the corner proportionally to how far the nose is off.
+				const float cornerScale = std::clamp(cos(errorDeg * (static_cast<float>(M_PI) / 180.0f)), 0.35f, 1.0f);
+				const float headingMathRad = (driveHeadingDeg_ - 270.0f) * (static_cast<float>(M_PI) / 180.0f);
+				const float flat = sqrt(std::max(0.0f, 1.0f - direction.z * direction.z));
+				const Vector3 travelDirection(cos(headingMathRad) * flat, sin(headingMathRad) * flat, direction.z);
+				position_ = position + travelDirection * velocityLength * cornerScale * deltaTimeMS;
+
+				auto rotation = rotation_.ToEuler();
+				rotation.z = driveHeadingDeg_;
+				rotation_ = GTAQuat(rotation);
+			}
+			else
+			{
+				auto travelled = direction * velocityLength * deltaTimeMS;
+				position_ = position + travelled;
+			}
 		}
 	}
 
@@ -3167,6 +3234,8 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 	playingNode_ = true;
 	nodePlayingPaused_ = false;
 	nodeLanePreference_ = rand();
+	// playNode teleports the NPC to the node start, so steering continuity is void.
+	driveHeadingValid_ = false;
 
 	// Update node point and start movement
 	updateNodePoint(currentNodePoint_);
