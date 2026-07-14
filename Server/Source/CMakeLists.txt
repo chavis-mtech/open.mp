@@ -34,6 +34,9 @@ if(MSVC)
 		shlwapi
 		winmm
 	)
+elseif(APPLE)
+	# macOS: libc++/compiler-rt provide atomics built in, no separate libatomic exists.
+	target_link_libraries(Server PRIVATE dl)
 else()
 	target_link_libraries(Server PRIVATE dl atomic)
 
