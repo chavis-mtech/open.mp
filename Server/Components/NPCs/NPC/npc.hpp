@@ -550,6 +550,11 @@ private:
 	float nodeMoveRadius_;
 	bool nodeSetAngle_;
 	Vector3 nodeLastPosition_;
+	// Raw lane preference drawn once per node run; mapped onto each edge's available lane
+	// count with modulo so the NPC keeps a stable lane while the road widens/narrows.
+	int nodeLanePreference_;
+
+	Vector3 nodeTargetWithLaneOffset(uint16_t fromPointId, uint16_t toPointId, Vector3 targetPosition) const;
 
 	NPCComponent* npcComponent_;
 };

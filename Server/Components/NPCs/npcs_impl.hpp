@@ -232,15 +232,30 @@ public:
 		return &nodeManager_;
 	}
 
+	bool isLaneDrivingEnabled() const
+	{
+		return laneDrivingEnabled == nullptr || *laneDrivingEnabled;
+	}
+
+	float getLaneWidth() const
+	{
+		return laneWidth != nullptr ? *laneWidth : 5.0f;
+	}
+
 	void provideConfiguration(ILogger& logger, IEarlyConfig& config, bool defaults) override
 	{
 		int defaultGeneralNPCUpdateRateMS = 50;
 		int defaultFootSyncSkipUpdateLimit = 15;
 		int defaultDriverSyncSkipUpdateLimit = 15;
 		int defaultAimSyncSkipUpdateLimit = 15;
+		bool defaultLaneDrivingEnabled = true;
+		// GTA SA's own car AI spaces traffic lanes ~5 units apart around the path node line.
+		float defaultLaneWidth = 5.0f;
 
 		if (defaults)
 		{
+			config.setBool("npc.lane_driving", defaultLaneDrivingEnabled);
+			config.setFloat("npc.lane_width", defaultLaneWidth);
 			config.setInt("npc.process_update_rate", defaultGeneralNPCUpdateRateMS);
 			config.setInt("npc.on_foot_sync_rate", *config.getInt("network.on_foot_sync_rate"));
 			config.setInt("npc.in_vehicle_sync_rate", *config.getInt("network.in_vehicle_sync_rate"));
@@ -286,6 +301,16 @@ public:
 			{
 				config.setInt("npc.aim_sync_skip_update_limit", defaultAimSyncSkipUpdateLimit);
 			}
+
+			if (config.getType("npc.lane_driving") == ConfigOptionType_None)
+			{
+				config.setBool("npc.lane_driving", defaultLaneDrivingEnabled);
+			}
+
+			if (config.getType("npc.lane_width") == ConfigOptionType_None)
+			{
+				config.setFloat("npc.lane_width", defaultLaneWidth);
+			}
 		}
 
 		generalNPCUpdateRateMS = config.getInt("npc.process_update_rate");
@@ -295,6 +320,8 @@ public:
 		footSyncSkipUpdateLimit = config.getInt("npc.on_foot_sync_skip_update_limit");
 		vehicleSyncSkipUpdateLimit = config.getInt("npc.in_vehicle_sync_skip_update_limit");
 		aimSyncSkipUpdateLimit = config.getInt("npc.aim_sync_skip_update_limit");
+		laneDrivingEnabled = config.getBool("npc.lane_driving");
+		laneWidth = config.getFloat("npc.lane_width");
 	}
 
 private:
@@ -314,6 +341,10 @@ private:
 	int* footSyncSkipUpdateLimit = nullptr;
 	int* vehicleSyncSkipUpdateLimit = nullptr;
 	int* aimSyncSkipUpdateLimit = nullptr;
+
+	// Node-graph lane driving
+	bool* laneDrivingEnabled = nullptr;
+	float* laneWidth = nullptr;
 
 	// Components
 	IVehiclesComponent* vehicles = nullptr;

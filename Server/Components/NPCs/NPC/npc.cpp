@@ -132,6 +132,7 @@ NPC::NPC(NPCComponent* component, IPlayer* playerPtr)
 	, nodeMoveRadius_(0.0f)
 	, nodeSetAngle_(true)
 	, nodeLastPosition_(Vector3(0.0f, 0.0f, 0.0f))
+	, nodeLanePreference_(-1)
 {
 	// Fill weapon accuracy with 1.0f, let server devs change it with the desired values
 	weaponAccuracy_.fill(1.0f);
@@ -2629,8 +2630,8 @@ void NPC::advance(TimePoint now)
 					lastNodePoint_ = currentNodePoint_;
 					currentNodePoint_ = newPoint;
 
-					// Update position and move to new point
-					Vector3 newPosition = currentNode_->getPosition();
+					// Update position and move to new point, keeping to this edge's lane
+					Vector3 newPosition = nodeTargetWithLaneOffset(lastNodePoint_, currentNodePoint_, currentNode_->getPosition());
 					move(newPosition, nodeMoveType_, nodeMoveSpeed_, nodeMoveRadius_);
 				}
 				else
@@ -3091,6 +3092,47 @@ void NPC::tick(Microseconds elapsed, TimePoint now)
 	}
 }
 
+Vector3 NPC::nodeTargetWithLaneOffset(uint16_t fromPointId, uint16_t toPointId, Vector3 targetPosition) const
+{
+	// Lane keeping only makes sense for vehicle node driving; pedestrians keep the node line.
+	if (!currentNode_ || !npcComponent_ || !npcComponent_->isLaneDrivingEnabled())
+	{
+		return targetPosition;
+	}
+	if (!(vehicle_ && vehicleSeat_ == 0) && nodeMoveType_ != NPCMoveType_Drive)
+	{
+		return targetPosition;
+	}
+
+	const NodeEdgeLaneInfo laneInfo = currentNode_->getEdgeLaneInfo(fromPointId, toPointId);
+	if (!laneInfo.found || laneInfo.forwardLanes <= 0 || nodeLanePreference_ < 0)
+	{
+		return targetPosition;
+	}
+
+	const int lane = nodeLanePreference_ % laneInfo.forwardLanes;
+	const float laneWidth = npcComponent_->getLaneWidth();
+	// Two-way: the node line divides the directions, forward lanes start right of it.
+	// One-way: the node line is the road centre, forward lanes straddle it.
+	const float offset = laneInfo.oncomingLanes > 0
+		? (static_cast<float>(lane) + 0.5f) * laneWidth
+		: (static_cast<float>(lane) + 0.5f - static_cast<float>(laneInfo.forwardLanes) * 0.5f) * laneWidth;
+
+	const Vector3 fromPosition = currentNode_->getPositionOf(fromPointId);
+	const float dx = targetPosition.x - fromPosition.x;
+	const float dy = targetPosition.y - fromPosition.y;
+	const float length = sqrt(dx * dx + dy * dy);
+	if (length < 0.5f)
+	{
+		return targetPosition;
+	}
+
+	// Right-hand traffic: shift perpendicular to the travel direction, to the right.
+	targetPosition.x += (dy / length) * offset;
+	targetPosition.y += (-dx / length) * offset;
+	return targetPosition;
+}
+
 bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radius, bool setAngle)
 {
 	if (playback_)
@@ -3124,10 +3166,11 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 	lastNodePoint_ = currentNode_->getPointId();
 	playingNode_ = true;
 	nodePlayingPaused_ = false;
+	nodeLanePreference_ = rand();
 
 	// Update node point and start movement
 	updateNodePoint(currentNodePoint_);
-	nodePosition = currentNode_->getPosition();
+	nodePosition = nodeTargetWithLaneOffset(lastNodePoint_, currentNodePoint_, currentNode_->getPosition());
 	move(nodePosition, moveType, moveSpeed, radius);
 
 	return true;
@@ -3158,6 +3201,7 @@ void NPC::stopPlayingNode()
 	nodeMoveRadius_ = 0.0f;
 	nodeSetAngle_ = true;
 	nodeLastPosition_ = Vector3(0.0f, 0.0f, 0.0f);
+	nodeLanePreference_ = -1;
 
 	if (nodeId >= 0)
 	{

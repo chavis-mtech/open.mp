@@ -60,6 +60,17 @@ struct LinkNode
 
 #pragma pack(pop)
 
+// Lane layout of one directed edge of the vehicle node graph, resolved from the navi
+// nodes stored in NODES*.DAT. `forwardLanes` counts lanes running in the queried travel
+// direction, `oncomingLanes` the opposite direction. When `oncomingLanes` is zero the
+// path node line is the centre of a one-way road; otherwise it is the directional divider.
+struct NodeEdgeLaneInfo
+{
+	int forwardLanes = 0;
+	int oncomingLanes = 0;
+	bool found = false;
+};
+
 class NPCNode
 {
 public:
@@ -71,6 +82,8 @@ public:
 	uint16_t processNodeChange(NPC* npc, uint16_t targetPointId);
 
 	Vector3 getPosition();
+	Vector3 getPositionOf(uint16_t pointId) const;
+	NodeEdgeLaneInfo getEdgeLaneInfo(uint16_t fromPointId, uint16_t toPointId) const;
 	int getNodesNumber() const;
 	void getHeaderInfo(uint32_t& vehicleNodes, uint32_t& pedNodes, uint32_t& naviNodes) const;
 
@@ -97,6 +110,9 @@ private:
 	DynamicArray<PathNode> pathNodes_;
 	DynamicArray<NaviNode> naviNodes_;
 	DynamicArray<LinkNode> linkNodes_;
+	// Navi entries of this area indexed by the path node they point at, so an edge's lane
+	// layout can be resolved from its two endpoint ids without scanning all navi nodes.
+	FlatHashMap<uint16_t, DynamicArray<uint16_t>> naviByTargetPoint_;
 
 	uint16_t currentPointId_;
 	uint16_t currentLinkId_;

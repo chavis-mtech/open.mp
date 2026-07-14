@@ -129,6 +129,18 @@ bool NPCNode::initialize(ICore* core)
 		currentPointId_ = 0;
 	}
 
+	// Index navi nodes by the path node they point at. Cross-area navi entries are skipped:
+	// their target ids belong to another NODES file and edge lookups here are same-area only.
+	naviByTargetPoint_.clear();
+	for (uint16_t i = 0; i < naviNodes_.size(); ++i)
+	{
+		const NaviNode& naviNode = naviNodes_[i];
+		if (naviNode.areaId == nodeId_ && naviNode.nodeId < pathNodes_.size())
+		{
+			naviByTargetPoint_[naviNode.nodeId].push_back(i);
+		}
+	}
+
 	initialized_ = true;
 	return true;
 }
@@ -227,6 +239,70 @@ Vector3 NPCNode::getPosition()
 		static_cast<float>(pathNode.positionY) / 8.0f,
 		static_cast<float>(pathNode.positionZ) / 8.0f + 1.2f);
 	return normalPosition;
+}
+
+Vector3 NPCNode::getPositionOf(uint16_t pointId) const
+{
+	if (!initialized_ || pointId >= pathNodes_.size())
+	{
+		return Vector3(0.0f, 0.0f, 0.0f);
+	}
+
+	const PathNode& pathNode = pathNodes_[pointId];
+	return Vector3(
+		static_cast<float>(pathNode.positionX) / 8.0f,
+		static_cast<float>(pathNode.positionY) / 8.0f,
+		static_cast<float>(pathNode.positionZ) / 8.0f);
+}
+
+NodeEdgeLaneInfo NPCNode::getEdgeLaneInfo(uint16_t fromPointId, uint16_t toPointId) const
+{
+	NodeEdgeLaneInfo info;
+	if (!initialized_ || fromPointId >= pathNodes_.size() || toPointId >= pathNodes_.size())
+	{
+		return info;
+	}
+
+	const Vector3 fromPosition = getPositionOf(fromPointId);
+	const Vector3 toPosition = getPositionOf(toPointId);
+	const float midX = (fromPosition.x + toPosition.x) * 0.5f;
+	const float midY = (fromPosition.y + toPosition.y) * 0.5f;
+	const float edgeDx = toPosition.x - fromPosition.x;
+	const float edgeDy = toPosition.y - fromPosition.y;
+	// A navi node sits on its edge, so the matching candidate must lie near this edge's
+	// midpoint; anything farther than the edge itself (plus slack) belongs to another edge.
+	const float maxDistanceSq = (edgeDx * edgeDx + edgeDy * edgeDy) + 25.0f;
+
+	float bestDistanceSq = maxDistanceSq;
+	// Each undirected edge has one navi node, pointing at one of the two endpoints. Its
+	// bits 11-13 count lanes running in its own direction, bits 8-10 the oncoming lanes.
+	const auto consider = [&](uint16_t targetPointId, bool naviPointsAlongTravel)
+	{
+		auto it = naviByTargetPoint_.find(targetPointId);
+		if (it == naviByTargetPoint_.end())
+		{
+			return;
+		}
+		for (uint16_t naviIndex : it->second)
+		{
+			const NaviNode& naviNode = naviNodes_[naviIndex];
+			const float dx = static_cast<float>(naviNode.positionX) / 8.0f - midX;
+			const float dy = static_cast<float>(naviNode.positionY) / 8.0f - midY;
+			const float distanceSq = dx * dx + dy * dy;
+			if (distanceSq < bestDistanceSq)
+			{
+				bestDistanceSq = distanceSq;
+				const int lanesWithNavi = static_cast<int>((naviNode.flags >> 11) & 0x7);
+				const int lanesAgainstNavi = static_cast<int>((naviNode.flags >> 8) & 0x7);
+				info.forwardLanes = naviPointsAlongTravel ? lanesWithNavi : lanesAgainstNavi;
+				info.oncomingLanes = naviPointsAlongTravel ? lanesAgainstNavi : lanesWithNavi;
+				info.found = true;
+			}
+		}
+	};
+	consider(toPointId, true);
+	consider(fromPointId, false);
+	return info;
 }
 
 int NPCNode::getNodesNumber() const
