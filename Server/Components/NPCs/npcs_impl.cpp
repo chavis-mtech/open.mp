@@ -7,6 +7,7 @@
  */
 
 #include "./npcs_impl.hpp"
+#include "./utils.hpp"
 #include <random>
 
 void NPCComponent::onLoad(ICore* c)
@@ -166,8 +167,9 @@ void NPCComponent::onPlayerGiveDamage(IPlayer& player, IPlayer& to, float amount
 
 			if (!npc->isInvulnerable())
 			{
-				bool eventResult = emulatePlayerGiveDamageToNPCEvent(player, *npc, amount, weapon, part, false);
-				npc->processDamage(&player, amount, weapon, part, eventResult);
+				const float damage = normaliseNPCDamage(amount, weapon);
+				bool eventResult = emulatePlayerGiveDamageToNPCEvent(player, *npc, damage, weapon, part, false);
+				npc->processDamage(&player, damage, weapon, part, eventResult);
 			}
 
 			shouldCallCustomEvents = true;

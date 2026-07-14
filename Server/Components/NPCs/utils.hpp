@@ -7,6 +7,7 @@
  */
 
 #pragma once
+#include <algorithm>
 #include <sdk.hpp>
 #include "npcs_impl.hpp"
 #include <Server/Components/Vehicles/vehicle_models.hpp>
@@ -67,6 +68,32 @@ static const float WeaponDamages[MAX_WEAPON_ID] = {
 	0.0f, // WEAPON_INFRARED (45)
 	0.0f, // WEAPON_PARACHUTE (46)
 };
+
+static inline bool isNPCMeleeWeapon(unsigned weapon)
+{
+	return weapon <= PlayerWeapon_Cane;
+}
+
+static inline float normaliseNPCDamage(float amount, unsigned weapon)
+{
+	float damage = std::max(0.0f, amount);
+	if (weapon < MAX_WEAPON_ID)
+	{
+		damage = std::max(damage, WeaponDamages[weapon]);
+	}
+
+	if (isNPCMeleeWeapon(weapon))
+	{
+		const float minimumMeleeDamage = weapon == PlayerWeapon_Fist ? 8.0f : 12.0f;
+		damage = std::max(damage, minimumMeleeDamage);
+	}
+	if (weapon == PlayerWeapon_Chainsaw)
+	{
+		damage = std::max(damage, 20.0f);
+	}
+
+	return damage;
+}
 
 inline WeaponInfo* getCustomWeaponInfo(StaticArray<WeaponInfo, MAX_WEAPON_ID>& list, uint8_t weapon)
 {
