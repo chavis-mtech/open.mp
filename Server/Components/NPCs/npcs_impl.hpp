@@ -247,6 +247,16 @@ public:
 		return driveYawRate != nullptr ? *driveYawRate : 80.0f;
 	}
 
+	float getDriveZClearance() const
+	{
+		return driveZClearance != nullptr ? *driveZClearance : 0.35f;
+	}
+
+	float getMaxLaneOffset() const
+	{
+		return maxLaneOffset != nullptr ? *maxLaneOffset : 4.5f;
+	}
+
 	void provideConfiguration(ILogger& logger, IEarlyConfig& config, bool defaults) override
 	{
 		int defaultGeneralNPCUpdateRateMS = 50;
@@ -258,12 +268,18 @@ public:
 		float defaultLaneWidth = 5.0f;
 		// Max steering slew for driven NPCs, degrees of facing change per second.
 		float defaultDriveYawRate = 80.0f;
+		// Chassis-centre height above the node/road line for driven NPC vehicles.
+		float defaultDriveZClearance = 0.35f;
+		// Hard cap on lateral lane-keeping offset from the node line (kerb guard).
+		float defaultMaxLaneOffset = 4.5f;
 
 		if (defaults)
 		{
 			config.setBool("npc.lane_driving", defaultLaneDrivingEnabled);
 			config.setFloat("npc.lane_width", defaultLaneWidth);
 			config.setFloat("npc.drive_yaw_rate", defaultDriveYawRate);
+			config.setFloat("npc.drive_z_clearance", defaultDriveZClearance);
+			config.setFloat("npc.max_lane_offset", defaultMaxLaneOffset);
 			config.setInt("npc.process_update_rate", defaultGeneralNPCUpdateRateMS);
 			config.setInt("npc.on_foot_sync_rate", *config.getInt("network.on_foot_sync_rate"));
 			config.setInt("npc.in_vehicle_sync_rate", *config.getInt("network.in_vehicle_sync_rate"));
@@ -324,6 +340,16 @@ public:
 			{
 				config.setFloat("npc.drive_yaw_rate", defaultDriveYawRate);
 			}
+
+			if (config.getType("npc.drive_z_clearance") == ConfigOptionType_None)
+			{
+				config.setFloat("npc.drive_z_clearance", defaultDriveZClearance);
+			}
+
+			if (config.getType("npc.max_lane_offset") == ConfigOptionType_None)
+			{
+				config.setFloat("npc.max_lane_offset", defaultMaxLaneOffset);
+			}
 		}
 
 		generalNPCUpdateRateMS = config.getInt("npc.process_update_rate");
@@ -336,6 +362,8 @@ public:
 		laneDrivingEnabled = config.getBool("npc.lane_driving");
 		laneWidth = config.getFloat("npc.lane_width");
 		driveYawRate = config.getFloat("npc.drive_yaw_rate");
+		driveZClearance = config.getFloat("npc.drive_z_clearance");
+		maxLaneOffset = config.getFloat("npc.max_lane_offset");
 	}
 
 private:
@@ -362,6 +390,10 @@ private:
 
 	// Car steering slew rate
 	float* driveYawRate = nullptr;
+
+	// Driven-vehicle chassis clearance above node lines, and lane offset kerb guard
+	float* driveZClearance = nullptr;
+	float* maxLaneOffset = nullptr;
 
 	// Components
 	IVehiclesComponent* vehicles = nullptr;

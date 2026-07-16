@@ -558,6 +558,11 @@ private:
 	// a bounded yaw rate so driven vehicles arc through turns instead of snap-rotating.
 	float driveHeadingDeg_;
 	bool driveHeadingValid_;
+	// Segment the current drive move() started from. Steering chases a pursuit point on
+	// the start->target line instead of the raw endpoint, so cross-track error decays and
+	// the vehicle returns to its lane line instead of driving a parallel offset course.
+	Vector3 driveSegmentStart_;
+	bool driveSegmentValid_;
 
 	Vector3 nodeTargetWithLaneOffset(uint16_t fromPointId, uint16_t toPointId, Vector3 targetPosition) const;
 

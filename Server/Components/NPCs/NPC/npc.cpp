@@ -135,6 +135,8 @@ NPC::NPC(NPCComponent* component, IPlayer* playerPtr)
 	, nodeLanePreference_(-1)
 	, driveHeadingDeg_(0.0f)
 	, driveHeadingValid_(false)
+	, driveSegmentStart_(Vector3(0.0f, 0.0f, 0.0f))
+	, driveSegmentValid_(false)
 {
 	// Fill weapon accuracy with 1.0f, let server devs change it with the desired values
 	weaponAccuracy_.fill(1.0f);
@@ -543,6 +545,10 @@ bool NPC::move(Vector3 pos, NPCMoveType moveType, float moveSpeed, float stopRan
 				driveHeadingDeg_ = getRotation().ToEuler().z;
 				driveHeadingValid_ = true;
 			}
+			// The lane line this leg should hold: advance() chases a pursuit point on this
+			// segment, so lateral drift is steered back instead of ridden to the kerb.
+			driveSegmentStart_ = position;
+			driveSegmentValid_ = true;
 		}
 		else
 		{
@@ -550,6 +556,7 @@ bool NPC::move(Vector3 pos, NPCMoveType moveType, float moveSpeed, float stopRan
 			rotation.z = getAngleOfLine(front.x, front.y);
 			rotation_ = GTAQuat(rotation); // Do this directly, if you use NPC::setRotation it's going to cause recursion
 			driveHeadingValid_ = false;
+			driveSegmentValid_ = false;
 		}
 
 		// Calculate velocity to use on tick
@@ -2310,8 +2317,15 @@ void NPC::sendDriverSync()
 
 	uint16_t vehicleID = vehicle_->getID();
 
+	// Internal velocity is units-per-millisecond (see advance()); the sync packet carries
+	// GTA physics units (distance per 20ms frame). Sending the raw value made observing
+	// clients extrapolate a near-stationary car that the next packet snapped forward,
+	// which reads in-game as stutter, wheel jitter and "floating" NPC vehicles.
+	constexpr float kVelocityPerMsToPerFrame = 20.0f;
+	const Vector3 syncVelocity = velocity_ * kVelocityPerMsToPerFrame;
+
 	// Check if immediate update is needed (basic comparison for now)
-	bool needsImmediateUpdate = driverSync_.LeftRight != leftAndRight || driverSync_.UpDown != upAndDown || driverSync_.Keys != keys || driverSync_.Position != position_ || driverSync_.Rotation.q != rotation_.q || driverSync_.PlayerHealthArmour.x != health_ || driverSync_.PlayerHealthArmour.y != armour_ || driverSync_.VehicleID != vehicleID || driverSync_.Velocity != velocity_ || driverSync_.Health != vehicleHealth_;
+	bool needsImmediateUpdate = driverSync_.LeftRight != leftAndRight || driverSync_.UpDown != upAndDown || driverSync_.Keys != keys || driverSync_.Position != position_ || driverSync_.Rotation.q != rotation_.q || driverSync_.PlayerHealthArmour.x != health_ || driverSync_.PlayerHealthArmour.y != armour_ || driverSync_.VehicleID != vehicleID || driverSync_.Velocity != syncVelocity || driverSync_.Health != vehicleHealth_;
 
 	auto generateDriverSyncBitStream = [&](NetworkBitStream& bs)
 	{
@@ -2323,7 +2337,7 @@ void NPC::sendDriverSync()
 		driverSync_.Rotation = rotation_;
 		driverSync_.PlayerHealthArmour.x = health_;
 		driverSync_.PlayerHealthArmour.y = armour_;
-		driverSync_.Velocity = velocity_;
+		driverSync_.Velocity = syncVelocity;
 		driverSync_.Health = vehicleHealth_;
 
 		driverSync_.Siren = uint8_t(useVehicleSiren_);
@@ -2508,7 +2522,26 @@ void NPC::advance(TimePoint now)
 	float velocityLength = glm::length(velocity_);
 	auto maxTravel = velocityLength * deltaTimeMS;
 
-	if (distanceToTarget <= stopRange_ || maxTravel >= distanceToTarget)
+	// A close waypoint sitting far off the nose can't be reached by a rate-limited car
+	// without orbiting it or pivoting on the spot (which reads in-game as the vehicle
+	// spinning in place). Consume it and let route logic hand over the next leg instead.
+	bool driveWaypointBehind = false;
+	if (moveType_ == NPCMoveType_Drive && driveHeadingValid_ && distanceToTarget > FLT_EPSILON && distanceToTarget < 8.0f)
+	{
+		const float desiredDeg = getAngleOfLine(toTarget.x / distanceToTarget, toTarget.y / distanceToTarget);
+		float behindErrorDeg = desiredDeg - driveHeadingDeg_;
+		while (behindErrorDeg > 180.0f)
+		{
+			behindErrorDeg -= 360.0f;
+		}
+		while (behindErrorDeg < -180.0f)
+		{
+			behindErrorDeg += 360.0f;
+		}
+		driveWaypointBehind = fabs(behindErrorDeg) > 100.0f;
+	}
+
+	if (distanceToTarget <= stopRange_ || maxTravel >= distanceToTarget || driveWaypointBehind)
 	{
 		// Reached or about to overshoot target
 		// UPDATE: Since we have stopRange now, let's set NPC's position as where it is now, after reaching.
@@ -2630,8 +2663,9 @@ void NPC::advance(TimePoint now)
 							lastNodePoint_ = currentNodePoint_;
 							currentNodePoint_ = changedPoint;
 
-							// Update position and move to new point
-							Vector3 newPosition = currentNode_->getPosition();
+							// Update position and move to new point (edge lane data rarely
+							// spans node files; this still applies the drive z clearance)
+							Vector3 newPosition = nodeTargetWithLaneOffset(lastNodePoint_, currentNodePoint_, currentNode_->getPosition());
 							move(newPosition, nodeMoveType_, nodeMoveSpeed_, nodeMoveRadius_);
 						}
 						else
@@ -2673,10 +2707,35 @@ void NPC::advance(TimePoint now)
 			auto direction = toTarget / distanceToTarget;
 			if (moveType_ == NPCMoveType_Drive && driveHeadingValid_ && velocityLength > FLT_EPSILON)
 			{
-				// Steer like a car: slew the facing toward the target at a bounded yaw
-				// rate, slow down through the turn, and travel along the facing so the
-				// vehicle arcs through corners instead of pivoting on the spot.
-				const float desiredDeg = getAngleOfLine(direction.x, direction.y);
+				// Steer like a car: slew the facing toward a pursuit point at a bounded,
+				// speed-scaled yaw rate, slow down through the turn, and travel along the
+				// facing so the vehicle arcs through corners instead of pivoting on the spot.
+				const float speedMetersPerSec = velocityLength * 1000.0f;
+
+				// Chase a point ahead on the segment line rather than the raw endpoint:
+				// with endpoint chasing, a laterally drifted car drives a parallel course
+				// (into the kerb) until the endpoint is near; pursuit steers the drift out.
+				Vector3 aimPoint = targetPosition_;
+				if (driveSegmentValid_)
+				{
+					const Vector3 segment = targetPosition_ - driveSegmentStart_;
+					const float segmentLen2dSq = segment.x * segment.x + segment.y * segment.y;
+					if (segmentLen2dSq > 1.0f)
+					{
+						const Vector3 fromStart = position - driveSegmentStart_;
+						float t = (fromStart.x * segment.x + fromStart.y * segment.y) / segmentLen2dSq;
+						t = std::clamp(t, 0.0f, 1.0f);
+						const float segmentLen2d = sqrt(segmentLen2dSq);
+						const float lookahead = std::clamp(speedMetersPerSec * 0.9f, 4.0f, 12.0f);
+						const float tAhead = std::min(1.0f, t + lookahead / segmentLen2d);
+						aimPoint = driveSegmentStart_ + segment * tAhead;
+					}
+				}
+				Vector3 toAim = aimPoint - position;
+				const float aimDistance = glm::length(toAim);
+				const Vector3 aimDirection = aimDistance > FLT_EPSILON ? toAim / aimDistance : direction;
+
+				const float desiredDeg = getAngleOfLine(aimDirection.x, aimDirection.y);
 				float errorDeg = desiredDeg - driveHeadingDeg_;
 				while (errorDeg > 180.0f)
 				{
@@ -2687,13 +2746,13 @@ void NPC::advance(TimePoint now)
 					errorDeg += 360.0f;
 				}
 
-				float yawRateDegPerSec = npcComponent_->getDriveYawRateDegPerSec();
-				// A close target far off the nose would make a rate-limited car orbit it
-				// forever; pivot faster instead so the waypoint is still consumed.
-				if (distanceToTarget < 8.0f && fabs(errorDeg) > 90.0f)
-				{
-					yawRateDegPerSec *= 3.0f;
-				}
+				// A real car's yaw rate is bounded by speed / turn radius: fast cars sweep
+				// wide arcs, a crawling car cannot whip its nose around on the spot.
+				constexpr float kMinTurnRadius = 6.0f;
+				constexpr float kMinYawRateDegPerSec = 18.0f;
+				const float speedLimitedYawRate = (speedMetersPerSec / kMinTurnRadius) * (180.0f / static_cast<float>(M_PI));
+				const float yawRateDegPerSec = std::clamp(
+					speedLimitedYawRate, kMinYawRateDegPerSec, npcComponent_->getDriveYawRateDegPerSec());
 				const float maxStepDeg = yawRateDegPerSec * deltaTimeSEC;
 				driveHeadingDeg_ += std::clamp(errorDeg, -maxStepDeg, maxStepDeg);
 				while (driveHeadingDeg_ >= 360.0f)
@@ -2712,8 +2771,16 @@ void NPC::advance(TimePoint now)
 				const Vector3 travelDirection(cos(headingMathRad) * flat, sin(headingMathRad) * flat, direction.z);
 				position_ = position + travelDirection * velocityLength * cornerScale * deltaTimeMS;
 
+				// Keep the reported velocity aligned with the actual travel so observers'
+				// dead reckoning matches the motion instead of dragging the car sideways
+				// toward the waypoint between sync packets.
+				velocity_ = travelDirection * velocityLength;
+
 				auto rotation = rotation_.ToEuler();
 				rotation.z = driveHeadingDeg_;
+				// Align pitch with the slope being climbed so wheels track inclines
+				// instead of the nose digging into them (positive = nose up).
+				rotation.x = glm::degrees(asin(std::clamp(direction.z, -0.5f, 0.5f)));
 				rotation_ = GTAQuat(rotation);
 			}
 			else
@@ -3162,11 +3229,21 @@ void NPC::tick(Microseconds elapsed, TimePoint now)
 Vector3 NPC::nodeTargetWithLaneOffset(uint16_t fromPointId, uint16_t toPointId, Vector3 targetPosition) const
 {
 	// Lane keeping only makes sense for vehicle node driving; pedestrians keep the node line.
-	if (!currentNode_ || !npcComponent_ || !npcComponent_->isLaneDrivingEnabled())
+	if (!currentNode_ || !npcComponent_)
 	{
 		return targetPosition;
 	}
 	if (!(vehicle_ && vehicleSeat_ == 0) && nodeMoveType_ != NPCMoveType_Drive)
+	{
+		return targetPosition;
+	}
+
+	// Node lines sit at road surface height, but a vehicle's sync origin is its chassis
+	// centre: targeting road level embeds the wheels and every observing client
+	// collision-corrects the car upward each frame (permanent bouncing / floating).
+	targetPosition.z += npcComponent_->getDriveZClearance();
+
+	if (!npcComponent_->isLaneDrivingEnabled())
 	{
 		return targetPosition;
 	}
@@ -3181,9 +3258,13 @@ Vector3 NPC::nodeTargetWithLaneOffset(uint16_t fromPointId, uint16_t toPointId, 
 	const float laneWidth = npcComponent_->getLaneWidth();
 	// Two-way: the node line divides the directions, forward lanes start right of it.
 	// One-way: the node line is the road centre, forward lanes straddle it.
-	const float offset = laneInfo.oncomingLanes > 0
+	// Clamped: lane-count flags in NODES.DAT are generous on some roads, and an outer
+	// lane computed past the clamp is a car driving down the sidewalk.
+	const float rawOffset = laneInfo.oncomingLanes > 0
 		? (static_cast<float>(lane) + 0.5f) * laneWidth
 		: (static_cast<float>(lane) + 0.5f - static_cast<float>(laneInfo.forwardLanes) * 0.5f) * laneWidth;
+	const float maxOffset = npcComponent_->getMaxLaneOffset();
+	const float offset = std::clamp(rawOffset, -maxOffset, maxOffset);
 
 	const Vector3 fromPosition = currentNode_->getPositionOf(fromPointId);
 	const float dx = targetPosition.x - fromPosition.x;
@@ -3223,9 +3304,10 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 		return false;
 	}
 
-	// Set initial position and start movement
-	Vector3 nodePosition = currentNode_->getPosition();
-	setPositionHandled(nodePosition, true);
+	// Deliberately NO teleport to the node start here: callers pick a start point near
+	// the NPC and movement below walks/drives there naturally. The old snap was a
+	// visible warp — a punched ped blinking sideways before fleeing, a vehicle blinking
+	// down the road at route start.
 
 	// Set link and point information
 	currentNode_->setLink(currentNode_->getLinkId());
@@ -3234,12 +3316,12 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 	playingNode_ = true;
 	nodePlayingPaused_ = false;
 	nodeLanePreference_ = rand();
-	// playNode teleports the NPC to the node start, so steering continuity is void.
+	// A fresh route: steer from the entity's current facing.
 	driveHeadingValid_ = false;
 
 	// Update node point and start movement
 	updateNodePoint(currentNodePoint_);
-	nodePosition = nodeTargetWithLaneOffset(lastNodePoint_, currentNodePoint_, currentNode_->getPosition());
+	Vector3 nodePosition = nodeTargetWithLaneOffset(lastNodePoint_, currentNodePoint_, currentNode_->getPosition());
 	move(nodePosition, moveType, moveSpeed, radius);
 
 	return true;
