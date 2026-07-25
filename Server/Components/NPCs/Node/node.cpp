@@ -8,6 +8,7 @@
 
 #include "node.hpp"
 #include "../NPC/npc.hpp"
+#include <algorithm>
 #include <random>
 #include <ghc/filesystem.hpp>
 #include <httplib.h>
@@ -151,75 +152,60 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastArea, uint16_
 {
 	if (!initialized_)
 	{
-		return 0;
+		return InvalidPoint;
 	}
-
-	bool linkRead = false;
 
 	uint16_t startLink = getLinkId(pointId);
 	uint16_t linkCount = getLinkCount(pointId);
-	uint8_t attempts = 0;
-	uint16_t linkId = startLink;
-
-	while (true)
+	if (linkCount == 0 || startLink >= linkNodes_.size())
 	{
-		do
-		{
-			attempts++;
-			if (attempts > 10)
-			{
-				return 0;
-			}
-
-			if (linkCount > 0)
-			{
-				linkId = startLink + (rand() % linkCount);
-			}
-			else
-			{
-				linkId = startLink;
-			}
-
-			linkRead = linkId < linkNodes_.size();
-		} while (!linkRead
-			|| (linkId < linkNodes_.size() && linkNodes_[linkId].areaId == lastArea
-				&& linkNodes_[linkId].nodeId == lastPoint && linkCount > 1)
-			|| (linkRead && !npc->isNodeLinkTraversable(*this, linkId, pointId)));
-
-		if (linkId >= linkNodes_.size())
-		{
-			return 0;
-		}
-
-		const LinkNode& currentLink = linkNodes_[linkId];
-		currentLinkId = linkId;
-
-		if (currentLink.areaId != nodeId_)
-		{
-			if (currentLink.areaId != 65535)
-			{
-				return 0xFFFF;
-			}
-			else
-			{
-				return 0;
-			}
-		}
-		else
-		{
-			npc->updateNodePoint(currentLink.nodeId);
-			return currentLink.nodeId;
-		}
+		return InvalidPoint;
 	}
 
-	return 0;
+	DynamicArray<uint16_t> forwardLinks;
+	DynamicArray<uint16_t> backtrackLinks;
+	const uint32_t endLink = std::min<uint32_t>(
+		static_cast<uint32_t>(startLink) + linkCount, static_cast<uint32_t>(linkNodes_.size()));
+	for (uint32_t candidate = startLink; candidate < endLink; ++candidate)
+	{
+		const LinkNode& link = linkNodes_[candidate];
+		if (link.areaId == 65535 || !npc->isNodeLinkTraversable(*this, static_cast<uint16_t>(candidate), pointId))
+		{
+			continue;
+		}
+		const bool backtrack = link.areaId == lastArea && link.nodeId == lastPoint;
+		(backtrack ? backtrackLinks : forwardLinks).push_back(static_cast<uint16_t>(candidate));
+	}
+
+	// Exhaustively inspect every edge rather than hoping ten random draws find a valid
+	// directional lane. Only U-turn when this is a real dead end.
+	const auto& candidates = !forwardLinks.empty() ? forwardLinks : backtrackLinks;
+	if (candidates.empty())
+	{
+		return InvalidPoint;
+	}
+	const uint16_t linkId = candidates[static_cast<std::size_t>(rand()) % candidates.size()];
+	const LinkNode& currentLink = linkNodes_[linkId];
+	currentLinkId = linkId;
+
+	if (currentLink.areaId != nodeId_)
+	{
+		if (currentLink.areaId != 65535)
+		{
+			return ChangeArea;
+		}
+		return InvalidPoint;
+	}
+
+	npc->updateNodePoint(currentLink.nodeId);
+	return currentLink.nodeId;
 }
 
 uint16_t NPCNode::processNodeChange(NPC* npc, uint16_t targetPointId)
 {
 	if (!initialized_ || targetPointId >= pathNodes_.size())
 	{
-		return 0;
+		return InvalidPoint;
 	}
 
 	npc->updateNodePoint(targetPointId);

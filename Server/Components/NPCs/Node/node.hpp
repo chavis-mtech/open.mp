@@ -63,6 +63,9 @@ struct LinkNode
 class NPCNode
 {
 public:
+	static constexpr uint16_t InvalidPoint = 0xFFFE;
+	static constexpr uint16_t ChangeArea = 0xFFFF;
+
 	NPCNode(int nodeId);
 	~NPCNode();
 

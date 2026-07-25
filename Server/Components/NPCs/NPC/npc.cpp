@@ -615,7 +615,10 @@ unsigned int NPC::getInterior() const
 
 Vector3 NPC::getVelocity() const
 {
-	return player_->getPosition();
+	// `position_` was returned here historically, which made every caller interpret
+	// world coordinates as units-per-millisecond velocity.  Predictive avoidance then
+	// projected NPCs kilometres away and could not detect an actual converging pair.
+	return velocity_;
 }
 
 void NPC::setVelocity(Vector3 velocity, bool update)
@@ -1553,7 +1556,12 @@ bool NPC::putInVehicle(IVehicle& vehicle, uint8_t seat)
 		return false;
 	}
 
-	setPositionHandled(vehicle.getPosition(), true);
+	// Do not emit an on-foot sync at the vehicle origin immediately before assigning the
+	// seat.  Remote clients render that packet as a standing ped inside/under the chassis
+	// for a frame (feet through the floor), and under packet reordering it can persist.
+	// Establish the authoritative seat first, then send exactly the matching sync type.
+	stopMove();
+	position_ = vehicle.getPosition();
 	vehicle.putPlayer(*player_, seat);
 	vehicle_ = &vehicle;
 	vehicleSeat_ = seat;
@@ -1561,7 +1569,15 @@ bool NPC::putInVehicle(IVehicle& vehicle, uint8_t seat)
 	auto angle = vehicle.getRotation().ToEuler().z;
 	auto rotation = getRotation().ToEuler();
 	rotation.z = angle;
-	setRotationHandled(rotation, true);
+	rotation_ = GTAQuat(rotation);
+	if (seat == 0)
+	{
+		sendDriverSync();
+	}
+	else
+	{
+		sendPassengerSync();
+	}
 
 	return true;
 }
@@ -2449,13 +2465,15 @@ void NPC::advance(TimePoint now)
 	float velocityLength = glm::length(velocity_);
 	auto maxTravel = velocityLength * deltaTimeMS;
 
-	if (distanceToTarget <= stopRange_ || maxTravel >= distanceToTarget)
+	const bool withinStopRange = distanceToTarget <= stopRange_;
+	if (withinStopRange || maxTravel >= distanceToTarget)
 	{
 		// Reached or about to overshoot target
-		// UPDATE: Since we have stopRange now, let's set NPC's position as where it is now, after reaching.
-		// As in, let's just use position, instead of targetPosition.
-		auto finalPos = position;
-		// auto finalPos = targetPosition_; // just copy this to use in setPosition, since stopMove resets it
+		// If this tick would overshoot a target that is still outside the accepted stop
+		// radius, land on it. Keeping the old position silently consumed short node legs;
+		// dense pedestrian/vehicle graphs could therefore advance forever while the
+		// visible entity ran in place.
+		auto finalPos = withinStopRange ? position : targetPosition_;
 
 		// If following a player, check autoRestart setting
 		bool wasFollowingPlayer = followingPlayer_ != nullptr;
@@ -2559,7 +2577,7 @@ void NPC::advance(TimePoint now)
 				uint16_t newPoint = currentNode_->process(
 					this, currentNodePoint_, lastNodeArea_, lastNodePoint_, currentLinkId);
 
-				if (newPoint == 0xFFFF)
+				if (newPoint == NPCNode::ChangeArea)
 				{
 					// Need to change node - get target info from last processed link
 					NPCNode* sourceNode = currentNode_;
@@ -2580,7 +2598,7 @@ void NPC::advance(TimePoint now)
 						const Vector3 newPosition
 							= nodeLinkPosition(*sourceNode, currentLinkId, sourcePoint, fallback);
 						uint16_t changedPoint = changeNode(targetNodeId, targetPointId);
-						if (changedPoint > 0)
+						if (changedPoint != NPCNode::InvalidPoint)
 						{
 							lastNodeArea_ = sourceArea;
 							lastNodePoint_ = sourcePoint;
@@ -2597,7 +2615,7 @@ void NPC::advance(TimePoint now)
 						stopPlayingNode();
 					}
 				}
-				else if (newPoint > 0)
+				else if (newPoint != NPCNode::InvalidPoint)
 				{
 					Vector3 newPosition = nodeLinkPosition(
 						*currentNode_, currentLinkId, currentNodePoint_, currentNode_->getPosition(newPoint));
@@ -3107,7 +3125,7 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 	NPCNode* sourceNode = currentNode_;
 	const uint16_t sourceArea = static_cast<uint16_t>(sourceNode->getNodeId());
 	Vector3 nextPosition {};
-	if (nextPoint == 0xFFFF)
+	if (nextPoint == NPCNode::ChangeArea)
 	{
 		uint16_t targetNodeId = 0;
 		uint16_t targetPointId = 0;
@@ -3122,7 +3140,7 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 			*sourceNode, currentLinkId, currentNodePoint_, targetNode->getPosition(targetPointId));
 		nextPoint = changeNode(targetNodeId, targetPointId);
 	}
-	if (nextPoint == 0)
+	if (nextPoint == NPCNode::InvalidPoint)
 	{
 		stopPlayingNode();
 		return false;
@@ -3180,8 +3198,11 @@ void NPC::pausePlayingNode()
 		return;
 	}
 
+	// Preserve the in-flight node destination before stopMove() clears it. Resuming to
+	// the current position completes immediately and skips a graph edge, which caused
+	// traffic to jump lanes or remain stationary after every red-light hold.
+	nodeLastPosition_ = targetPosition_;
 	stopMove();
-	nodeLastPosition_ = getPosition();
 	nodePlayingPaused_ = true;
 }
 
@@ -3210,7 +3231,7 @@ uint16_t NPC::changeNode(int nodeId, uint16_t targetPointId)
 {
 	if (!playingNode_)
 	{
-		return 0;
+		return NPCNode::InvalidPoint;
 	}
 
 	int oldNodeId = currentNode_ ? currentNode_->getNodeId() : -1;
@@ -3227,14 +3248,14 @@ uint16_t NPC::changeNode(int nodeId, uint16_t targetPointId)
 
 	if (!shouldChangeNode)
 	{
-		return 0;
+		return NPCNode::InvalidPoint;
 	}
 
 	// Get the new node instance
 	currentNode_ = npcComponent_->getNodeManager()->getNode(nodeId);
 	if (!currentNode_)
 	{
-		return 0;
+		return NPCNode::InvalidPoint;
 	}
 
 	// Process the node change with the provided target point ID
@@ -3336,7 +3357,16 @@ Vector3 NPC::nodeLinkPosition(const NPCNode& sourceNode, uint16_t linkId, uint16
 	directionX /= length;
 	directionY /= length;
 	const float medianWidth = static_cast<float>(naviNode.flags & 0xFF) / 8.0f;
-	const float laneOffset = medianWidth + LaneWidth * 0.5f;
+	const uint8_t leftLanes = static_cast<uint8_t>((naviNode.flags >> 8) & 0x7);
+	const uint8_t rightLanes = static_cast<uint8_t>((naviNode.flags >> 11) & 0x7);
+	const uint8_t laneCount = forward ? rightLanes : leftLanes;
+	// Keep a stable per-NPC lane preference. On roads with two or more lanes this
+	// naturally distributes traffic instead of stacking every vehicle in lane one;
+	// clamping preserves continuity when a road narrows.
+	const uint8_t laneIndex = laneCount > 0
+		? static_cast<uint8_t>(std::min<int>(player_->getID() % 2, laneCount - 1))
+		: 0;
+	const float laneOffset = medianWidth + LaneWidth * (0.5f + static_cast<float>(laneIndex));
 	// Right-hand traffic: (dy, -dx) is the right normal of the travel vector.
 	return Vector3(
 		static_cast<float>(naviNode.positionX) / 8.0f + directionY * laneOffset,
