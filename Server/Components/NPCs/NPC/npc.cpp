@@ -96,6 +96,7 @@ NPC::NPC(NPCComponent* component, IPlayer* playerPtr)
 	, playingNode_(false)
 	, nodePlayingPaused_(false)
 	, currentNodePoint_(0)
+	, lastNodeArea_(0xFFFF)
 	, lastNodePoint_(0)
 	, nodeMoveType_(NPCMoveType_Auto)
 	, nodeMoveSpeed_(NPC_MOVE_SPEED_AUTO)
@@ -1502,6 +1503,14 @@ void NPC::enterVehicle(IVehicle& vehicle, uint8_t seatId, NPCMoveType moveType)
 
 void NPC::exitVehicle()
 {
+	// Exit is an asynchronous 1.5 second transition. Reissuing the request used to
+	// restart that timer, so callers polling for completion could trap an NPC in an
+	// endless open-door/warp/open-door loop. One request owns the transition.
+	if (exitingVehicle_)
+	{
+		return;
+	}
+
 	if (player_->getState() != PlayerState_Driver && player_->getState() != PlayerState_Passenger)
 	{
 		return;
@@ -1513,6 +1522,10 @@ void NPC::exitVehicle()
 		return;
 	}
 
+	// A node/path must not keep feeding throttle while the exit animation is playing.
+	// Keep the node cursor intact so a later resume can start a fresh route safely.
+	stopMove();
+
 	NetworkBitStream bs;
 	bs.writeUINT16(vehicleData->getVehicle()->getID());
 	npcComponent_->emulateRPCIn(*player_, NetCode::RPC::OnPlayerExitVehicle::PacketID, bs);
@@ -1523,6 +1536,12 @@ void NPC::exitVehicle()
 
 bool NPC::putInVehicle(IVehicle& vehicle, uint8_t seat)
 {
+	// Never warp an NPC back into a seat while its asynchronous exit is still active.
+	// This is the other half of the carjack loop fix.
+	if (exitingVehicle_)
+	{
+		return false;
+	}
 	if (player_->getState() != PlayerState_OnFoot && spawning_ == false)
 	{
 		spawn();
@@ -1564,6 +1583,11 @@ bool NPC::removeFromVehicle()
 
 	vehicle_ = nullptr;
 	vehicleSeat_ = SEAT_NONE;
+	exitingVehicle_ = false;
+	enteringVehicle_ = false;
+	vehicleToEnter_ = nullptr;
+	vehicleSeatToEnter_ = SEAT_NONE;
+	jackingVehicle_ = false;
 	useVehicleSiren_ = false;
 	hydraThrusterDirection_ = 5000;
 	vehicleGearState_ = 0;
@@ -2532,23 +2556,35 @@ void NPC::advance(TimePoint now)
 				npcComponent_->getEventDispatcher_internal().dispatch(&NPCEventHandler::onNPCFinishNodePoint, *this, currentNode_->getNodeId(), currentNodePoint_);
 
 				uint16_t currentLinkId;
-				uint16_t newPoint = currentNode_->process(this, currentNodePoint_, lastNodePoint_, currentLinkId);
+				uint16_t newPoint = currentNode_->process(
+					this, currentNodePoint_, lastNodeArea_, lastNodePoint_, currentLinkId);
 
 				if (newPoint == 0xFFFF)
 				{
 					// Need to change node - get target info from last processed link
-					int targetNodeId = currentNode_->getLastLinkTargetNodeId();
-					uint16_t targetPointId = currentNode_->getLastLinkTargetPointId();
-					if (npcComponent_->getNodeManager()->isNodeOpen(targetNodeId))
+					NPCNode* sourceNode = currentNode_;
+					const uint16_t sourceArea = static_cast<uint16_t>(sourceNode->getNodeId());
+					const uint16_t sourcePoint = currentNodePoint_;
+					uint16_t targetNodeId = 0;
+					uint16_t targetPointId = 0;
+					if (!currentNode_->getLinkTarget(currentLinkId, targetNodeId, targetPointId))
 					{
+						stopPlayingNode();
+						return;
+					}
+					if (npcComponent_->getNodeManager()->isNodeOpen(targetNodeId)
+						|| npcComponent_->openNode(targetNodeId))
+					{
+						NPCNode* targetNode = npcComponent_->getNodeManager()->getNode(targetNodeId);
+						const Vector3 fallback = targetNode->getPosition(targetPointId);
+						const Vector3 newPosition
+							= nodeLinkPosition(*sourceNode, currentLinkId, sourcePoint, fallback);
 						uint16_t changedPoint = changeNode(targetNodeId, targetPointId);
 						if (changedPoint > 0)
 						{
-							lastNodePoint_ = currentNodePoint_;
+							lastNodeArea_ = sourceArea;
+							lastNodePoint_ = sourcePoint;
 							currentNodePoint_ = changedPoint;
-
-							// Update position and move to new point
-							Vector3 newPosition = currentNode_->getPosition();
 							move(newPosition, nodeMoveType_, nodeMoveSpeed_, nodeMoveRadius_);
 						}
 						else
@@ -2563,11 +2599,11 @@ void NPC::advance(TimePoint now)
 				}
 				else if (newPoint > 0)
 				{
+					Vector3 newPosition = nodeLinkPosition(
+						*currentNode_, currentLinkId, currentNodePoint_, currentNode_->getPosition(newPoint));
+					lastNodeArea_ = static_cast<uint16_t>(currentNode_->getNodeId());
 					lastNodePoint_ = currentNodePoint_;
 					currentNodePoint_ = newPoint;
-
-					// Update position and move to new point
-					Vector3 newPosition = currentNode_->getPosition();
 					move(newPosition, nodeMoveType_, nodeMoveSpeed_, nodeMoveRadius_);
 				}
 				else
@@ -3049,21 +3085,57 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 		return false;
 	}
 
-	// Set initial position and start movement
-	Vector3 nodePosition = currentNode_->getPosition();
+	// Capture the externally selected start point immediately. NPCNode instances are
+	// shared by the component; retaining their mutable selection as per-NPC navigation
+	// state made one driver overwrite every other driver's point and caused teleports,
+	// wrong-way headings and centre-road pileups.
+	const uint16_t startPoint = currentNode_->getPointId();
+	Vector3 nodePosition = currentNode_->getPosition(startPoint);
 	setPositionHandled(nodePosition, true);
 
-	// Set link and point information
-	currentNode_->setLink(currentNode_->getLinkId());
-	currentNodePoint_ = currentNode_->getLinkPoint();
-	lastNodePoint_ = currentNode_->getPointId();
+	// The cursor belongs to this NPC. Select the first connected point through the same
+	// processor used for subsequent legs instead of reading the node's shared link cursor.
+	currentNodePoint_ = startPoint;
+	lastNodeArea_ = 0xFFFF;
+	lastNodePoint_ = 0xFFFF;
 	playingNode_ = true;
 	nodePlayingPaused_ = false;
 
-	// Update node point and start movement
-	updateNodePoint(currentNodePoint_);
-	nodePosition = currentNode_->getPosition();
-	move(nodePosition, moveType, moveSpeed, radius);
+	uint16_t currentLinkId = 0;
+	uint16_t nextPoint = currentNode_->process(
+		this, currentNodePoint_, lastNodeArea_, lastNodePoint_, currentLinkId);
+	NPCNode* sourceNode = currentNode_;
+	const uint16_t sourceArea = static_cast<uint16_t>(sourceNode->getNodeId());
+	Vector3 nextPosition {};
+	if (nextPoint == 0xFFFF)
+	{
+		uint16_t targetNodeId = 0;
+		uint16_t targetPointId = 0;
+		if (!currentNode_->getLinkTarget(currentLinkId, targetNodeId, targetPointId)
+			|| (!npcComponent_->getNodeManager()->isNodeOpen(targetNodeId) && !npcComponent_->openNode(targetNodeId)))
+		{
+			stopPlayingNode();
+			return false;
+		}
+		NPCNode* targetNode = npcComponent_->getNodeManager()->getNode(targetNodeId);
+		nextPosition = nodeLinkPosition(
+			*sourceNode, currentLinkId, currentNodePoint_, targetNode->getPosition(targetPointId));
+		nextPoint = changeNode(targetNodeId, targetPointId);
+	}
+	if (nextPoint == 0)
+	{
+		stopPlayingNode();
+		return false;
+	}
+	if (nextPosition == Vector3 {})
+	{
+		nextPosition = nodeLinkPosition(
+			*sourceNode, currentLinkId, currentNodePoint_, currentNode_->getPosition(nextPoint));
+	}
+	lastNodeArea_ = sourceArea;
+	lastNodePoint_ = currentNodePoint_;
+	currentNodePoint_ = nextPoint;
+	move(nextPosition, moveType, moveSpeed, radius);
 
 	return true;
 }
@@ -3087,6 +3159,7 @@ void NPC::stopPlayingNode()
 	playingNode_ = false;
 	nodePlayingPaused_ = false;
 	currentNodePoint_ = 0;
+	lastNodeArea_ = 0xFFFF;
 	lastNodePoint_ = 0;
 	nodeMoveType_ = NPCMoveType_Auto;
 	nodeMoveSpeed_ = NPC_MOVE_SPEED_AUTO;
@@ -3177,13 +3250,98 @@ bool NPC::updateNodePoint(uint16_t pointId)
 		return false;
 	}
 
-	Vector3 position;
-	currentNode_->setPoint(pointId);
-	position = currentNode_->getPosition();
+	const Vector3 position = currentNode_->getPosition(pointId);
 
 	// Update movement destination
 	targetPosition_ = position;
 	return true;
+}
+
+bool NPC::resolveNodeLink(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
+	NaviNode& naviNode, bool& forward)
+{
+	if (!sourceNode.isVehiclePoint(fromPoint))
+	{
+		return false;
+	}
+	uint16_t naviArea = 0;
+	uint16_t naviId = 0;
+	uint16_t targetArea = 0;
+	uint16_t targetPoint = 0;
+	if (!sourceNode.getNaviLinkTarget(linkId, naviArea, naviId)
+		|| !sourceNode.getLinkTarget(linkId, targetArea, targetPoint))
+	{
+		return false;
+	}
+	if (!npcComponent_->getNodeManager()->isNodeOpen(naviArea) && !npcComponent_->openNode(naviArea))
+	{
+		return false;
+	}
+	NPCNode* naviOwner = npcComponent_->getNodeManager()->getNode(naviArea);
+	if (!naviOwner || !naviOwner->getNaviNode(naviId, naviNode))
+	{
+		return false;
+	}
+	if (naviNode.areaId == targetArea && naviNode.nodeId == targetPoint)
+	{
+		forward = true;
+		return true;
+	}
+	if (naviNode.areaId == sourceNode.getNodeId() && naviNode.nodeId == fromPoint)
+	{
+		forward = false;
+		return true;
+	}
+	return false;
+}
+
+bool NPC::isNodeLinkTraversable(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint)
+{
+	NaviNode naviNode {};
+	bool forward = true;
+	if (!resolveNodeLink(sourceNode, linkId, fromPoint, naviNode, forward))
+	{
+		// Ped links use zero navi-link entries, while custom/legacy files can omit
+		// lane metadata. Keep those graphs traversable as before.
+		return true;
+	}
+	const uint8_t leftLanes = static_cast<uint8_t>((naviNode.flags >> 8) & 0x7);
+	const uint8_t rightLanes = static_cast<uint8_t>((naviNode.flags >> 11) & 0x7);
+	return forward ? rightLanes > 0 : leftLanes > 0;
+}
+
+Vector3 NPC::nodeLinkPosition(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
+	const Vector3& fallback)
+{
+	NaviNode naviNode {};
+	bool forward = true;
+	if (nodeMoveType_ != NPCMoveType_Drive || !resolveNodeLink(sourceNode, linkId, fromPoint, naviNode, forward))
+	{
+		return fallback;
+	}
+
+	constexpr float LaneWidth = 3.5f;
+	float directionX = static_cast<float>(static_cast<int8_t>(naviNode.directionX)) / 100.0f;
+	float directionY = static_cast<float>(static_cast<int8_t>(naviNode.directionY)) / 100.0f;
+	if (!forward)
+	{
+		directionX = -directionX;
+		directionY = -directionY;
+	}
+	const float length = std::sqrt(directionX * directionX + directionY * directionY);
+	if (length < 0.01f)
+	{
+		return fallback;
+	}
+	directionX /= length;
+	directionY /= length;
+	const float medianWidth = static_cast<float>(naviNode.flags & 0xFF) / 8.0f;
+	const float laneOffset = medianWidth + LaneWidth * 0.5f;
+	// Right-hand traffic: (dy, -dx) is the right normal of the travel vector.
+	return Vector3(
+		static_cast<float>(naviNode.positionX) / 8.0f + directionY * laneOffset,
+		static_cast<float>(naviNode.positionY) / 8.0f - directionX * laneOffset,
+		fallback.z);
 }
 
 void NPC::setInvulnerable(bool toggle)

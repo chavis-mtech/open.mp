@@ -122,6 +122,20 @@ bool NPCNode::initialize(ICore* core)
 		}
 	}
 
+	// Section 3 is followed by a fixed 768-byte filler, then one packed navi-link
+	// for every path link. The referenced NaviNode carries direction and lane counts.
+	file.seekg(768, std::ios::cur);
+	if (!file.good())
+	{
+		return false;
+	}
+	naviLinks_.resize(nodeHeader_.linksNumber);
+	if (nodeHeader_.linksNumber > 0
+		&& !file.read(reinterpret_cast<char*>(naviLinks_.data()), nodeHeader_.linksNumber * sizeof(uint16_t)))
+	{
+		return false;
+	}
+
 	file.close();
 
 	if (!pathNodes_.empty())
@@ -133,7 +147,7 @@ bool NPCNode::initialize(ICore* core)
 	return true;
 }
 
-uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastPoint, uint16_t& currentLinkId)
+uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastArea, uint16_t lastPoint, uint16_t& currentLinkId)
 {
 	if (!initialized_)
 	{
@@ -142,10 +156,8 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastPoint, uint16
 
 	bool linkRead = false;
 
-	setPoint(pointId);
-
-	uint16_t startLink = getLinkId();
-	uint16_t linkCount = getLinkCount();
+	uint16_t startLink = getLinkId(pointId);
+	uint16_t linkCount = getLinkCount(pointId);
 	uint8_t attempts = 0;
 	uint16_t linkId = startLink;
 
@@ -168,8 +180,11 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastPoint, uint16
 				linkId = startLink;
 			}
 
-			linkRead = setLink(linkId);
-		} while (!linkRead || (linkId < linkNodes_.size() && linkNodes_[linkId].nodeId == lastPoint && linkCount > 1));
+			linkRead = linkId < linkNodes_.size();
+		} while (!linkRead
+			|| (linkId < linkNodes_.size() && linkNodes_[linkId].areaId == lastArea
+				&& linkNodes_[linkId].nodeId == lastPoint && linkCount > 1)
+			|| (linkRead && !npc->isNodeLinkTraversable(*this, linkId, pointId)));
 
 		if (linkId >= linkNodes_.size())
 		{
@@ -183,7 +198,6 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastPoint, uint16
 		{
 			if (currentLink.areaId != 65535)
 			{
-				currentLinkId_ = linkId;
 				return 0xFFFF;
 			}
 			else
@@ -193,7 +207,6 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastPoint, uint16
 		}
 		else
 		{
-			currentLinkId_ = linkId;
 			npc->updateNodePoint(currentLink.nodeId);
 			return currentLink.nodeId;
 		}
@@ -209,7 +222,6 @@ uint16_t NPCNode::processNodeChange(NPC* npc, uint16_t targetPointId)
 		return 0;
 	}
 
-	currentPointId_ = targetPointId;
 	npc->updateNodePoint(targetPointId);
 	return targetPointId;
 }
@@ -227,6 +239,20 @@ Vector3 NPCNode::getPosition()
 		static_cast<float>(pathNode.positionY) / 8.0f,
 		static_cast<float>(pathNode.positionZ) / 8.0f + 1.2f);
 	return normalPosition;
+}
+
+Vector3 NPCNode::getPosition(uint16_t pointId) const
+{
+	if (!initialized_ || pointId >= pathNodes_.size())
+	{
+		return Vector3(0.0f, 0.0f, 0.0f);
+	}
+
+	const PathNode& pathNode = pathNodes_[pointId];
+	return Vector3(
+		static_cast<float>(pathNode.positionX) / 8.0f,
+		static_cast<float>(pathNode.positionY) / 8.0f,
+		static_cast<float>(pathNode.positionZ) / 8.0f + 1.2f);
 }
 
 int NPCNode::getNodesNumber() const
@@ -279,6 +305,52 @@ uint16_t NPCNode::getLinkCount() const
 	if (!initialized_ || currentPointId_ >= pathNodes_.size())
 		return 0;
 	return static_cast<uint16_t>(pathNodes_[currentPointId_].flags & 0xF);
+}
+
+uint16_t NPCNode::getLinkId(uint16_t pointId) const
+{
+	if (!initialized_ || pointId >= pathNodes_.size())
+		return 0;
+	return pathNodes_[pointId].linkId;
+}
+
+uint16_t NPCNode::getLinkCount(uint16_t pointId) const
+{
+	if (!initialized_ || pointId >= pathNodes_.size())
+		return 0;
+	return static_cast<uint16_t>(pathNodes_[pointId].flags & 0xF);
+}
+
+bool NPCNode::getLinkTarget(uint16_t linkId, uint16_t& areaId, uint16_t& pointId) const
+{
+	if (!initialized_ || linkId >= linkNodes_.size())
+		return false;
+	areaId = linkNodes_[linkId].areaId;
+	pointId = linkNodes_[linkId].nodeId;
+	return true;
+}
+
+bool NPCNode::getNaviLinkTarget(uint16_t linkId, uint16_t& areaId, uint16_t& naviId) const
+{
+	if (!initialized_ || linkId >= naviLinks_.size())
+		return false;
+	const uint16_t packed = naviLinks_[linkId];
+	areaId = packed >> 10;
+	naviId = packed & 0x03FF;
+	return true;
+}
+
+bool NPCNode::getNaviNode(uint16_t naviId, NaviNode& naviNode) const
+{
+	if (!initialized_ || naviId >= naviNodes_.size())
+		return false;
+	naviNode = naviNodes_[naviId];
+	return true;
+}
+
+bool NPCNode::isVehiclePoint(uint16_t pointId) const
+{
+	return initialized_ && pointId < nodeHeader_.vehicleNodesNumber;
 }
 
 uint8_t NPCNode::getPathWidth() const

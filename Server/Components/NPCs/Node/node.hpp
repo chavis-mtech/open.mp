@@ -67,10 +67,11 @@ public:
 	~NPCNode();
 
 	bool initialize(ICore* core);
-	uint16_t process(NPC* npc, uint16_t pointId, uint16_t lastPoint, uint16_t& currentLinkId);
+	uint16_t process(NPC* npc, uint16_t pointId, uint16_t lastArea, uint16_t lastPoint, uint16_t& currentLinkId);
 	uint16_t processNodeChange(NPC* npc, uint16_t targetPointId);
 
 	Vector3 getPosition();
+	Vector3 getPosition(uint16_t pointId) const;
 	int getNodesNumber() const;
 	void getHeaderInfo(uint32_t& vehicleNodes, uint32_t& pedNodes, uint32_t& naviNodes) const;
 
@@ -79,6 +80,12 @@ public:
 	uint16_t getAreaId() const;
 	uint16_t getPointId() const;
 	uint16_t getLinkCount() const;
+	uint16_t getLinkId(uint16_t pointId) const;
+	uint16_t getLinkCount(uint16_t pointId) const;
+	bool getLinkTarget(uint16_t linkId, uint16_t& areaId, uint16_t& pointId) const;
+	bool getNaviLinkTarget(uint16_t linkId, uint16_t& areaId, uint16_t& naviId) const;
+	bool getNaviNode(uint16_t naviId, NaviNode& naviNode) const;
+	bool isVehiclePoint(uint16_t pointId) const;
 	uint8_t getPathWidth() const;
 	uint8_t getNodeType() const;
 	uint16_t getLinkPoint() const;
@@ -97,6 +104,7 @@ private:
 	DynamicArray<PathNode> pathNodes_;
 	DynamicArray<NaviNode> naviNodes_;
 	DynamicArray<LinkNode> linkNodes_;
+	DynamicArray<uint16_t> naviLinks_;
 
 	uint16_t currentPointId_;
 	uint16_t currentLinkId_;

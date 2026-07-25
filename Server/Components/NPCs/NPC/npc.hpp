@@ -17,6 +17,7 @@ class NPCPlayback;
 class NPCPath;
 
 class NPCNode;
+struct NaviNode;
 
 class NPCComponent;
 
@@ -310,6 +311,14 @@ public:
 
 	void advance(TimePoint now);
 
+	// Internal node-graph helpers. NPCNode calls the traversal predicate while
+	// choosing links; movement uses the same metadata to stay in a directional lane.
+	bool resolveNodeLink(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
+		NaviNode& naviNode, bool& forward);
+	bool isNodeLinkTraversable(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint);
+	Vector3 nodeLinkPosition(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
+		const Vector3& fallback);
+
 	IVehicle* getEnteringVehicle() override
 	{
 		return vehicleToEnter_;
@@ -544,6 +553,7 @@ private:
 	bool playingNode_;
 	bool nodePlayingPaused_;
 	uint16_t currentNodePoint_;
+	uint16_t lastNodeArea_;
 	uint16_t lastNodePoint_;
 	NPCMoveType nodeMoveType_;
 	float nodeMoveSpeed_;
