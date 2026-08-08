@@ -1244,7 +1244,11 @@ void NPC::shoot(int hitId, PlayerBulletHitType hitType, uint8_t weapon, const Ve
 			auto npc = static_cast<NPC*>(npcComponent_->get(bulletData.hitID));
 			if (npc)
 				{
-					if (!dead_ && !invulnerable_)
+					// The dead/invulnerable state that decides whether a bullet lands is the
+					// target's, not the shooter's. Testing the shooter let bullets through
+					// into corpses and into NPCs the script had made invulnerable, while an
+					// invulnerable shooter could not hurt anyone.
+					if (!dead_ && !npc->isDead() && !npc->isInvulnerable())
 					{
 						const float baseDamage = bulletData.weapon < MAX_WEAPON_ID ? WeaponDamages[bulletData.weapon] : 0.0f;
 						const float damage = normaliseNPCDamage(baseDamage, bulletData.weapon);

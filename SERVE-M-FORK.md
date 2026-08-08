@@ -19,7 +19,7 @@ Server/Components/NPCs/NPC/npc.cpp    heavy the driving, sync and damage work be
 Server/Components/NPCs/NPC/npc.hpp    +10
 Server/Components/NPCs/Node/node.cpp  ~168  directional / lane-aware node traversal
 Server/Components/NPCs/Node/node.hpp  +15
-Server/Components/NPCs/npcs_impl.cpp  +6    damage animation wiring
+Server/Components/NPCs/npcs_impl.cpp  +8    damage animation wiring, dead NPCs take no damage
 Server/Components/NPCs/utils.hpp      +27   weapon damage normalisation
 ```
 
@@ -36,7 +36,14 @@ first thing to revisit whenever there is time for a PR.
 | `NPC::move()` | declares a local `float moveSpeed_`, shadowing the member. The member keeps its previous value and the requested speed is silently dropped. |
 | `NPC::sendFootSync()` | keys off the vehicle pointer alone. A foot packet emitted after `putInVehicle` beats the driver packet on remote clients: the ped stands at the vehicle origin with their legs through the floor. |
 | `NPC::sendDriverSync()` | sends `velocity_` raw. Internal velocity is per-millisecond; the packet field is per-20ms-frame. Observers extrapolate a near-stationary car that each packet snaps forward — in-game, stutter and floating vehicles. |
+| `NPC::processDamage()` | applies damage to a dead NPC and never kills on the lethal hit; death is left to the next tick, which only fires while the player state is on foot. Here a corpse is rejected and the lethal hit kills immediately, with the killer and weapon that actually landed it. |
+| `NPC::shoot()` | decides whether a bullet lands from the **shooter's** `dead_`/`invulnerable_`, not the target's. Bullets pass into corpses and into NPCs a script made invulnerable, while an invulnerable shooter cannot hurt anyone (upstream [#1244](https://github.com/openmultiplayer/open.mp/issues/1244)). |
+| `NPCComponent::onPlayerGiveDamage()` | raises `onNPCTakeDamage` and subtracts health for a dead NPC, so shots fired into a body read to a script as an NPC alive on 0 HP — the second half of [#1244](https://github.com/openmultiplayer/open.mp/issues/1244). Wasted players do not take damage; nor should NPCs. |
 | macOS link | links `atomic` alongside `dl`; libc++/compiler-rt provide atomics and no separate libatomic exists there. |
+
+The first half of #1244 — `NPC_Respawn()` leaving `dead_` set, so `kill()` returns early
+forever and `OnNPCDeath` never fires again — is upstream's own bug, fixed by `0dbf39dd`
+and present in every build from 3097 onwards. The report was filed against 3079.
 
 ## B. SERVE-M behaviour
 

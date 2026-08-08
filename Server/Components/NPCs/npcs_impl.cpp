@@ -165,7 +165,10 @@ void NPCComponent::onPlayerGiveDamage(IPlayer& player, IPlayer& to, float amount
 		{
 			shouldCallCustomEvents = false;
 
-			if (!npc->isInvulnerable())
+			// A corpse takes no damage, exactly as a wasted player does not. Without the
+			// dead check the shots a client keeps firing into a body still raise
+			// onNPCTakeDamage, which reads to a script as an NPC that is alive on 0 HP.
+			if (!npc->isDead() && !npc->isInvulnerable())
 			{
 				const float damage = normaliseNPCDamage(amount, weapon);
 				bool eventResult = emulatePlayerGiveDamageToNPCEvent(player, *npc, damage, weapon, part, false);
