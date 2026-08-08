@@ -59,7 +59,7 @@ Expected to stay in the fork.
 
 ## C. Considered and deliberately not taken
 
-From the earlier `serve-m` line (`8860acca`), reconciled in `5cb485cd`. Recorded because
+From the earlier `serve-m` line (`8860acca`), reconciled in `49f19f64`. Recorded because
 they are genuinely good and should be reconsidered once there is a way to check them:
 
 - **Pursuit steering** — chases a lookahead point on the current segment so cross-track
