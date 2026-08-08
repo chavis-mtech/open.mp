@@ -2344,8 +2344,15 @@ void NPC::sendDriverSync()
 
 	uint16_t vehicleID = vehicle_->getID();
 
+	// Internal velocity is units-per-millisecond (see advance()); the sync packet carries
+	// GTA physics units (distance per 20ms frame). Sending the raw value made observing
+	// clients extrapolate a near-stationary car that the next packet snapped forward,
+	// which reads in-game as stutter, wheel jitter and "floating" NPC vehicles.
+	constexpr float kVelocityPerMsToPerFrame = 20.0f;
+	const Vector3 syncVelocity = velocity_ * kVelocityPerMsToPerFrame;
+
 	// Check if immediate update is needed (basic comparison for now)
-	bool needsImmediateUpdate = driverSync_.LeftRight != leftAndRight || driverSync_.UpDown != upAndDown || driverSync_.Keys != keys || driverSync_.Position != position_ || driverSync_.Rotation.q != rotation_.q || driverSync_.PlayerHealthArmour.x != health_ || driverSync_.PlayerHealthArmour.y != armour_ || driverSync_.VehicleID != vehicleID || driverSync_.Velocity != velocity_ || driverSync_.Health != vehicleHealth_;
+	bool needsImmediateUpdate = driverSync_.LeftRight != leftAndRight || driverSync_.UpDown != upAndDown || driverSync_.Keys != keys || driverSync_.Position != position_ || driverSync_.Rotation.q != rotation_.q || driverSync_.PlayerHealthArmour.x != health_ || driverSync_.PlayerHealthArmour.y != armour_ || driverSync_.VehicleID != vehicleID || driverSync_.Velocity != syncVelocity || driverSync_.Health != vehicleHealth_;
 
 	auto generateDriverSyncBitStream = [&](NetworkBitStream& bs)
 	{
@@ -2357,7 +2364,7 @@ void NPC::sendDriverSync()
 		driverSync_.Rotation = rotation_;
 		driverSync_.PlayerHealthArmour.x = health_;
 		driverSync_.PlayerHealthArmour.y = armour_;
-		driverSync_.Velocity = velocity_;
+		driverSync_.Velocity = syncVelocity;
 		driverSync_.Health = vehicleHealth_;
 
 		driverSync_.Siren = uint8_t(useVehicleSiren_);
