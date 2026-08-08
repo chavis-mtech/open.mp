@@ -19,6 +19,9 @@ if(MSVC)
 	add_link_options("/LARGEADDRESSAWARE")
 	# Use strict intermediate floating-point precision
 	add_compile_options("/fp:strict")
+	# clang-cl does not enable C++ exception handling by default. open.mp and
+	# its bundled dependencies (cpp-httplib and ghc-filesystem) use exceptions.
+	add_compile_options("/EHsc")
 	add_compile_options("/MP")
 	if(CMAKE_SIZEOF_VOID_P EQUAL 4)
 		add_compile_options("/arch:SSE2")

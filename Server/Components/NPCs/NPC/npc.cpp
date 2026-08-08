@@ -428,7 +428,7 @@ bool NPC::move(Vector3 pos, NPCMoveType moveType, float moveSpeed, float stopRan
 	removeKey(Key::WALK);
 
 	// Determine which speed to use based on moving type
-	float moveSpeed_ = moveSpeed;
+	moveSpeed_ = moveSpeed;
 	moveType_ = moveType;
 
 	if (moveType_ == NPCMoveType_Drive)
@@ -499,11 +499,15 @@ bool NPC::move(Vector3 pos, NPCMoveType moveType, float moveSpeed, float stopRan
 	if (distance > FLT_EPSILON)
 	{
 		front = (pos - position) / distance;
-		auto rotation = getRotation().ToEuler();
-		rotation.z = getAngleOfLine(front.x, front.y);
-		rotation_ = GTAQuat(rotation); // Do this directly, if you use NPC::setRotation it's going to cause recursion
+		if (moveType_ != NPCMoveType_Drive)
+		{
+			auto rotation = getRotation().ToEuler();
+			rotation.z = getAngleOfLine(front.x, front.y);
+			rotation_ = GTAQuat(rotation); // Do this directly, if you use NPC::setRotation it's going to cause recursion
+		}
 
-		// Calculate velocity to use on tick
+		// advance() replaces a driver's velocity with its bounded steering vector on
+		// every tick. This initial value only supplies the requested speed magnitude.
 		velocity_ = front * (moveSpeed_ / 100.0f);
 	}
 	else
@@ -555,6 +559,7 @@ void NPC::stopMove()
 	}
 
 	upAndDown_ &= ~Key::UP;
+	leftAndRight_ = 0;
 	removeKey(Key::SPRINT);
 	removeKey(Key::WALK);
 	footSync_.UpDown = 0;
@@ -2184,7 +2189,16 @@ void NPC::updateAimData(const Vector3& point, bool setAngle)
 void NPC::sendFootSync()
 {
 	// Only send foot sync if player is spawned and on foot
-	if (!vehicle_)
+	// A foot packet sent after putInVehicle wins over the driver/passenger packet on
+	// remote clients and leaves the ped standing at the vehicle origin, with their legs
+	// through the floor.  The vehicle pointer is the NPC component's authoritative seat
+	// state, so never let an unrelated immediate update (rotation, animation, health,
+	// etc.) publish the incompatible sync type while it is set.
+	if (vehicle_ && vehicleSeat_ != SEAT_NONE)
+	{
+		return;
+	}
+	else
 	{
 		auto state = player_->getState();
 		//                                                           -- Checking for driver and passenger for the times npc has just been removed from vehicle
@@ -2462,11 +2476,50 @@ void NPC::advance(TimePoint now)
 
 	auto toTarget = targetPosition_ - position;
 	float distanceToTarget = glm::length(toTarget);
+	float driveHeadingError = 0.0f;
+	if (moveType_ == NPCMoveType_Drive && vehicle_ && vehicleSeat_ == 0 && distanceToTarget > FLT_EPSILON)
+	{
+		// Driver movement used to replace the quaternion with the next node heading in
+		// move().  Every graph edge therefore looked like a vehicle being grabbed and
+		// rotated in place.  Steer the authoritative vehicle heading at a bounded rate and
+		// reduce speed for a tight corner, which produces a real arc between road links.
+		constexpr float MaxSteeringDegreesPerSecond = 105.0f;
+		constexpr float SteeringDeadZoneDegrees = 1.5f;
+		const float desiredHeading = getAngleOfLine(toTarget.x, toTarget.y);
+		auto rotation = rotation_.ToEuler();
+		driveHeadingError = std::fmod(desiredHeading - rotation.z + 540.0f, 360.0f) - 180.0f;
+		const float headingStep = glm::clamp(driveHeadingError,
+			-MaxSteeringDegreesPerSecond * deltaTimeSEC, MaxSteeringDegreesPerSecond * deltaTimeSEC);
+		rotation.z = std::fmod(rotation.z + headingStep + 360.0f, 360.0f);
+		rotation_ = GTAQuat(rotation);
+
+		if (driveHeadingError > SteeringDeadZoneDegrees)
+		{
+			leftAndRight_ = static_cast<uint16_t>(Key::LEFT);
+		}
+		else if (driveHeadingError < -SteeringDeadZoneDegrees)
+		{
+			leftAndRight_ = static_cast<uint16_t>(Key::RIGHT);
+		}
+		else
+		{
+			leftAndRight_ = 0;
+		}
+
+		const float turnSpeedScale = glm::clamp(1.0f - std::abs(driveHeadingError) / 135.0f, 0.25f, 1.0f);
+		const float speedPerMillisecond = (moveSpeed_ / 100.0f) * turnSpeedScale;
+		const float headingRadians = glm::radians(rotation.z);
+		velocity_.x = -std::sin(headingRadians) * speedPerMillisecond;
+		velocity_.y = std::cos(headingRadians) * speedPerMillisecond;
+		velocity_.z = glm::clamp(toTarget.z / distanceToTarget, -0.35f, 0.35f) * speedPerMillisecond;
+	}
 	float velocityLength = glm::length(velocity_);
 	auto maxTravel = velocityLength * deltaTimeMS;
 
 	const bool withinStopRange = distanceToTarget <= stopRange_;
-	if (withinStopRange || maxTravel >= distanceToTarget)
+	const bool alignedForArrival
+		= moveType_ != NPCMoveType_Drive || std::abs(driveHeadingError) <= 10.0f;
+	if (withinStopRange || (alignedForArrival && maxTravel >= distanceToTarget))
 	{
 		// Reached or about to overshoot target
 		// If this tick would overshoot a target that is still outside the accepted stop
@@ -2638,11 +2691,14 @@ void NPC::advance(TimePoint now)
 	}
 	else
 	{
-		// Normalize direction and move by velocity * delta
+		// On foot, preserve the existing straight-line controller. Drivers follow the
+		// bounded steering vector calculated above so corners are arcs rather than a
+		// sideways slide under a smoothly rotating model.
 		if (distanceToTarget > FLT_EPSILON)
 		{
-			auto direction = toTarget / distanceToTarget;
-			auto travelled = direction * velocityLength * deltaTimeMS;
+			auto travelled = moveType_ == NPCMoveType_Drive
+				? velocity_ * deltaTimeMS
+				: (toTarget / distanceToTarget) * velocityLength * deltaTimeMS;
 			position_ = position + travelled;
 		}
 	}
