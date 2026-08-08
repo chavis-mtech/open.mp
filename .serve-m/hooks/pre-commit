@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# SERVE-M guard: this fork carries SERVE-M work on `serve-m` and nowhere else.
+#
+# `master` here is a read-only mirror of openmultiplayer/open.mp. Two commits once landed
+# on it by accident, and the symptom was not obvious: every "Update project" in the IDE
+# failed with `[rejected] master -> master (non-fast-forward)`, because the branch that is
+# supposed to mirror upstream had quietly drifted from it.
+#
+# Escape hatch, for a deliberate backup or experiment branch:
+#   SERVE_M_ALLOW_BRANCH=1 git commit ...
+set -euo pipefail
+
+if [[ "${SERVE_M_ALLOW_BRANCH:-0}" == "1" ]]; then
+    exit 0
+fi
+
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+
+if [[ "$branch" != "serve-m" ]]; then
+    echo "refusing to commit on '$branch'." >&2
+    echo >&2
+    echo "SERVE-M changes to open.mp belong on the 'serve-m' branch only;" >&2
+    echo "'master' mirrors upstream and must stay identical to it." >&2
+    echo >&2
+    echo "  git switch serve-m           # then commit" >&2
+    echo "  SERVE_M_ALLOW_BRANCH=1 ...   # if this branch really is intentional" >&2
+    exit 1
+fi

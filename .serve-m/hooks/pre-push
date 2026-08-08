@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# SERVE-M guard: never push to upstream, and never push anything to `master`.
+#
+# `upstream` is openmultiplayer/open.mp — a repository we do not own. Contributing there is
+# a deliberate act (open a PR from the fork), never a side effect of a push button in an
+# IDE that happened to have the wrong remote selected.
+#
+# Escape hatch, for a real upstream contribution:
+#   SERVE_M_ALLOW_UPSTREAM=1 git push upstream ...
+set -euo pipefail
+
+remote_name="${1:-}"
+remote_url="${2:-}"
+
+if [[ "${SERVE_M_ALLOW_UPSTREAM:-0}" != "1" ]]; then
+    if [[ "$remote_name" == "upstream" || "$remote_url" == *"openmultiplayer/open.mp"* ]]; then
+        echo "refusing to push to upstream ($remote_name -> $remote_url)." >&2
+        echo >&2
+        echo "Push to 'origin' (chavis-mtech/open.mp) instead. Contributing upstream is a" >&2
+        echo "pull request opened from the fork, not a push." >&2
+        echo "  SERVE_M_ALLOW_UPSTREAM=1 ...   # if this really is an upstream push" >&2
+        exit 1
+    fi
+fi
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    if [[ "$remote_ref" == "refs/heads/master" ]]; then
+        echo "refusing to push to master on $remote_name." >&2
+        echo "master mirrors upstream; SERVE-M work is published on 'serve-m'." >&2
+        exit 1
+    fi
+done
