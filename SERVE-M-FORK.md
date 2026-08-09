@@ -16,10 +16,11 @@ if a change can be made in SERVE-M's own C++ instead of here, make it there.
 CMakeLists.txt                        +3    clang-cl /EHsc
 Server/Source/CMakeLists.txt          +3    macOS: dl without libatomic
 Server/Components/NPCs/NPC/npc.cpp    heavy the driving, sync and damage work below
-Server/Components/NPCs/NPC/npc.hpp    +10
+Server/Components/NPCs/NPC/npc.hpp    +18
 Server/Components/NPCs/Node/node.cpp  ~168  directional / lane-aware node traversal
 Server/Components/NPCs/Node/node.hpp  +15
-Server/Components/NPCs/npcs_impl.cpp  +8    damage animation wiring, dead NPCs take no damage
+Server/Components/NPCs/npcs_impl.cpp  +26   damage animation wiring, dead NPCs take no damage, stream-in reseat
+Server/Components/NPCs/npcs_impl.hpp  +3    PlayerStreamEventHandler registration
 Server/Components/NPCs/utils.hpp      +27   weapon damage normalisation
 ```
 
@@ -61,6 +62,14 @@ Expected to stay in the fork.
 - **Seat-aware sync** — `putInVehicle()`, `removeFromVehicle()`, `enterVehicle()`,
   `exitVehicle()`, `sendPassengerSync()`. Drivers no longer briefly render on foot inside
   their own vehicle.
+- **Stream-in reseat** — `NPC::onObserverStreamedIn()`, `NPCComponent::onPlayerStreamIn()`.
+  Stream-in (RPC 32) carries no vehicle/seat, so a new observer renders a seated NPC as an
+  on-foot ped standing at the vehicle's coordinates until an in-vehicle sync arrives — and
+  a parked NPC's change-detector can withhold that packet for the whole skip-update window
+  (~sync rate × skip limit). Observers saw stationary drivers physics-pushed around their
+  own car, and the native carjack never armed because the seat looked empty locally. On
+  stream-in of a seated NPC the skip allowance is exhausted so the next sync slot emits
+  unconditionally.
 - **Damage animations** — `processDamage()`, `kill()`, `getAnimation()`, `utils.hpp`,
   `npcs_impl.cpp`. NPCs react to being hit instead of absorbing bullets impassively.
 

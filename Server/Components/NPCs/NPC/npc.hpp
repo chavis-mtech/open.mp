@@ -305,6 +305,15 @@ public:
 
 	void sendPassengerSync();
 
+	// A player just streamed this NPC in. Stream-in (RPC 32) carries no vehicle or seat,
+	// so the observer creates a seated NPC as an ON-FOOT ped standing at the vehicle's
+	// coordinates; only the next in-vehicle sync seats it. While the NPC is parked the
+	// change-detector may withhold that packet for the whole skip-update window, which is
+	// long enough for the observer to watch the "driver" being physics-pushed around its
+	// own car — and for the native carjack task never to arm, because the seat looks
+	// empty locally. Forces the next sync slot to emit unconditionally.
+	void onObserverStreamedIn();
+
 	void sendAimSync();
 
 	void tick(Microseconds elapsed, TimePoint now);

@@ -2492,6 +2492,26 @@ void NPC::sendPassengerSync()
 	}
 }
 
+void NPC::onObserverStreamedIn()
+{
+	// See the header comment: the freshly streamed-in observer is rendering this seated
+	// NPC as an on-foot ped inside its own vehicle until an in-vehicle sync arrives.
+	// Exhaust the skip-update allowance so the next sync slot (one in_vehicle_sync_rate
+	// tick away) emits even though nothing changed. Emulated sync packets broadcast to
+	// every observer, so this needs no per-player targeting.
+	if (vehicle_ && vehicleSeat_ != SEAT_NONE)
+	{
+		if (vehicleSeat_ == 0)
+		{
+			driverSyncSkipUpdate_ = npcComponent_->getVehicleSyncSkipUpdateLimit();
+		}
+		else
+		{
+			passengerSyncSkipUpdate_ = npcComponent_->getVehicleSyncSkipUpdateLimit();
+		}
+	}
+}
+
 void NPC::sendAimSync()
 {
 	// Newly spawned NPCs can briefly remain in Spawned until their first foot sync;
