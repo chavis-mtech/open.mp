@@ -1258,6 +1258,24 @@ void NPC::shoot(int hitId, PlayerBulletHitType hitType, uint8_t weapon, const Ve
 					npcComponent_->emulatePlayerTakeDamageFromNPCEvent(*npc->getPlayer(), *this, damage, bulletData.weapon, BodyPart_Torso, true);
 				}
 			}
+			else if (auto* target = npcComponent_->getCore()->getPlayers().get(bulletData.hitID))
+			{
+				// A human target has no client-side attacker that can originate the usual
+				// take-damage RPC. Emit the NPC and ordinary damage callbacks just as the
+				// NPC-target path above does. The gamemode owns health/armour application:
+				// IPlayer::setHealth/setArmour only send client RPCs and do not update the
+				// server's cached values synchronously, so applying and then observing here
+				// gives callbacks stale state and can overwrite the hit.
+				if (!dead_ && !target->isBot() && target->getHealth() > 0.0f)
+				{
+					const float baseDamage = bulletData.weapon < MAX_WEAPON_ID ? WeaponDamages[bulletData.weapon] : 0.0f;
+					const float damage = normaliseNPCDamage(baseDamage, bulletData.weapon);
+					if (damage > 0.0f)
+					{
+						npcComponent_->emulatePlayerTakeDamageFromNPCEvent(*target, *this, damage, bulletData.weapon, BodyPart_Torso, true);
+					}
+				}
+			}
 		}
 	}
 }
@@ -1654,7 +1672,14 @@ bool NPC::removeFromVehicle()
 
 	if (vehicleData)
 	{
-		setPositionHandled(seatPos, true);
+		// Land the authoritative position on the seat, but do NOT publish a foot packet for
+		// it.  Remote clients render that packet as a ped materialising inside the chassis it
+		// is leaving, and the engine resolves the interpenetration by launching the vehicle
+		// into the air.  A caller that cares (the carjack extraction) places the ped beside
+		// the door on the very next statement and that setPosition becomes the first on-foot
+		// packet clients ever see; a caller that does not simply gets the seat position from
+		// the next sync slot, harmlessly.  Same rule as putInVehicle above, on the way out.
+		setPositionHandled(seatPos, false);
 		vehicleData->resetVehicle(); // Using this internal function to reset player's vehicle data
 		player_->removeFromVehicle(true);
 	}
