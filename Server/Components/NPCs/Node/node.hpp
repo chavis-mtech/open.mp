@@ -100,6 +100,10 @@ public:
 	uint16_t getLastLinkTargetPointId() const;
 
 private:
+	// Vehicle points carry the chassis rest height, ped points the ped sync origin
+	// (mid-torso); see the definition for why parked cars float on the ped offset.
+	float pointZOffset(uint16_t pointId) const;
+
 	int nodeId_;
 	bool initialized_;
 

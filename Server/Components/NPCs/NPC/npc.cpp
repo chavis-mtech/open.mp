@@ -114,6 +114,7 @@ NPC::NPC(NPCComponent* component, IPlayer* playerPtr)
 	, enteringVehicle_(false)
 	, exitingVehicle_(false)
 	, jackingVehicle_(false)
+	, periodicInVehicleSyncHeldUntil_(TimePoint())
 	, killPlayerFromVehicleNextTick_(false)
 	, useVehicleSiren_(false)
 	, hydraThrusterDirection_(5000)
@@ -348,6 +349,7 @@ void NPC::spawn()
 	vehicleToEnter_ = nullptr;
 	vehicleSeatToEnter_ = SEAT_NONE;
 	jackingVehicle_ = false;
+	periodicInVehicleSyncHeldUntil_ = TimePoint();
 	vehicleEnterExitUpdateTime_ = TimePoint();
 
 	lastDamager_ = nullptr;
@@ -1665,6 +1667,7 @@ bool NPC::removeFromVehicle()
 	vehicleToEnter_ = nullptr;
 	vehicleSeatToEnter_ = SEAT_NONE;
 	jackingVehicle_ = false;
+	periodicInVehicleSyncHeldUntil_ = TimePoint();
 	useVehicleSiren_ = false;
 	hydraThrusterDirection_ = 5000;
 	vehicleGearState_ = 0;
@@ -2443,6 +2446,15 @@ void NPC::sendDriverSync()
 	}
 	else
 	{
+		// Nothing changed. While a human's announced entry task is dragging this driver
+		// out (holdPeriodicInVehicleSync), the periodic re-assert of the unchanged seated
+		// pose is exactly what snaps the victim back into the seat mid-drag on the
+		// jacker's screen — so it is held; a real state change still emits immediately
+		// through the branch above.
+		if (Time::now() < periodicInVehicleSyncHeldUntil_)
+		{
+			return;
+		}
 		if (driverSyncSkipUpdate_ < npcComponent_->getVehicleSyncSkipUpdateLimit())
 		{
 			driverSyncSkipUpdate_++;
@@ -2455,6 +2467,11 @@ void NPC::sendDriverSync()
 			driverSyncSkipUpdate_ = 0;
 		}
 	}
+}
+
+void NPC::holdPeriodicInVehicleSync(Milliseconds duration)
+{
+	periodicInVehicleSyncHeldUntil_ = Time::now() + duration;
 }
 
 void NPC::sendPassengerSync()
@@ -2503,6 +2520,12 @@ void NPC::sendPassengerSync()
 	}
 	else
 	{
+		// Same hold as sendDriverSync: a passenger-seat jack must not have its unchanged
+		// seated pose re-asserted mid-drag.
+		if (Time::now() < periodicInVehicleSyncHeldUntil_)
+		{
+			return;
+		}
 		if (passengerSyncSkipUpdate_ < npcComponent_->getVehicleSyncSkipUpdateLimit())
 		{
 			passengerSyncSkipUpdate_++;

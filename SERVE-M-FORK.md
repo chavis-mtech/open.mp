@@ -9,18 +9,20 @@ fixes, and the point of this one is to keep receiving them.
 
 ## The whole delta
 
-Eight files. Everything else is byte-identical to upstream, and it should stay that way —
-if a change can be made in SERVE-M's own C++ instead of here, make it there.
+Nine production-code files. Everything else in the product code is byte-identical to
+upstream, and it should stay that way — if a change can be made in SERVE-M's own C++
+instead of here, make it there. This document and the two branch-safety hooks are the
+only fork-maintenance files.
 
 ```
 CMakeLists.txt                        +3    clang-cl /EHsc
 Server/Source/CMakeLists.txt          +3    macOS: dl without libatomic
 Server/Components/NPCs/NPC/npc.cpp    heavy the driving, sync and damage work below
-Server/Components/NPCs/NPC/npc.hpp    +18
-Server/Components/NPCs/Node/node.cpp  ~168  directional / lane-aware node traversal
-Server/Components/NPCs/Node/node.hpp  +15
-Server/Components/NPCs/npcs_impl.cpp  +26   damage animation wiring, dead NPCs take no damage, stream-in reseat
-Server/Components/NPCs/npcs_impl.hpp  +3    PlayerStreamEventHandler registration
+Server/Components/NPCs/NPC/npc.hpp    ~27   fork declarations and state
+Server/Components/NPCs/Node/node.cpp  ~184  directional / lane-aware traversal and point-specific z
+Server/Components/NPCs/Node/node.hpp  ~19   node traversal and z helpers
+Server/Components/NPCs/npcs_impl.cpp  ~59   damage guards, stream-in reseat and carjack hold wiring
+Server/Components/NPCs/npcs_impl.hpp  ~8    stream and vehicle event registration
 Server/Components/NPCs/utils.hpp      +27   weapon damage normalisation
 ```
 
@@ -40,6 +42,7 @@ first thing to revisit whenever there is time for a PR.
 | `NPC::processDamage()` | applies damage to a dead NPC and never kills on the lethal hit; death is left to the next tick, which only fires while the player state is on foot. Here a corpse is rejected and the lethal hit kills immediately, with the killer and weapon that actually landed it. |
 | `NPC::shoot()` | decides whether a bullet lands from the **shooter's** `dead_`/`invulnerable_`, not the target's. Bullets pass into corpses and into NPCs a script made invulnerable, while an invulnerable shooter cannot hurt anyone (upstream [#1244](https://github.com/openmultiplayer/open.mp/issues/1244)). |
 | `NPCComponent::onPlayerGiveDamage()` | raises `onNPCTakeDamage` and subtracts health for a dead NPC, so shots fired into a body read to a script as an NPC alive on 0 HP — the second half of [#1244](https://github.com/openmultiplayer/open.mp/issues/1244). Wasted players do not take damage; nor should NPCs. |
+| `NPCNode::getPosition()` | adds the ped sync origin (+1.2, mid-torso) to EVERY path-node z, including vehicle points. A vehicle spawned or driver-synced from a vehicle node hangs ~0.7m above the road — and clients keep unoccupied-vehicle physics asleep until something touches the car, so a parked or abandoned one floats indefinitely. Here vehicle points (which precede ped points in the node file) carry the chassis rest height (+0.5) instead. |
 | macOS link | links `atomic` alongside `dl`; libc++/compiler-rt provide atomics and no separate libatomic exists there. |
 
 The first half of #1244 — `NPC_Respawn()` leaving `dead_` set, so `kill()` returns early
@@ -72,6 +75,13 @@ Expected to stay in the fork.
   unconditionally.
 - **Damage animations** — `processDamage()`, `kill()`, `getAnimation()`, `utils.hpp`,
   `npcs_impl.cpp`. NPCs react to being hit instead of absorbing bullets impassively.
+- **Carjack drag protection** — `NPCComponent::onPlayerEnterVehicle()`,
+  `NPC::holdPeriodicInVehicleSync()`, and the skip-limit branches of
+  `sendDriverSync()`/`sendPassengerSync()`. While a human's announced entry task runs
+  against a matching NPC-occupied driver or passenger seat, the periodic re-assert of the
+  unchanged seated pose is held (~5.8s, matching the jack allowance in onTick) so the
+  native drag on the jacker's screen is not interrupted by the victim snapping back into
+  the seat. Changed state still syncs immediately; a cancelled entry lets the hold lapse.
 
 ## C. Considered and deliberately not taken
 
@@ -95,7 +105,7 @@ they are genuinely good and should be reconsidered once there is a way to check 
 cd third_party/open.mp-server
 git fetch upstream
 git merge upstream/master          # conflicts, if any, will be in the files listed above
-git submodule update --init --recursive SDK CAPI   # upstream bumps these
+git submodule update --init --recursive            # upstream can bump any nested dependency
 cmake --build build-linux-x86_64 -j"$(nproc)"
 cd ../../gamemode && ./scripts/dev_build.sh && (cd build/linux-tests && ctest)
 git -C ../third_party/open.mp-server push origin serve-m

@@ -305,6 +305,13 @@ public:
 
 	void sendPassengerSync();
 
+	// A human's announced entry task is heading for this NPC's seat (a carjack). While
+	// that task drags the ped out on the jacker's client, every periodic re-emit of the
+	// unchanged seated pose snaps the victim back into the seat mid-drag. This holds the
+	// skip-limit re-assert for the entry window; genuinely changed state still emits
+	// immediately. See NPCComponent::onPlayerEnterVehicle.
+	void holdPeriodicInVehicleSync(Milliseconds duration);
+
 	// A player just streamed this NPC in. Stream-in (RPC 32) carries no vehicle or seat,
 	// so the observer creates a seated NPC as an ON-FOOT ped standing at the vehicle's
 	// coordinates; only the next in-vehicle sync seats it. While the NPC is parked the
@@ -538,6 +545,7 @@ private:
 	bool enteringVehicle_;
 	bool exitingVehicle_;
 	bool jackingVehicle_;
+	TimePoint periodicInVehicleSyncHeldUntil_;
 	TimePoint vehicleEnterExitUpdateTime_;
 	bool killPlayerFromVehicleNextTick_;
 	bool useVehicleSiren_;

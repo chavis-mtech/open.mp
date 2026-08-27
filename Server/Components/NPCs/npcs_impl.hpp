@@ -88,6 +88,10 @@ public:
 
 	void onPoolEntryDestroyed(IVehicle& vehicle) override;
 
+	// Holds the seat re-assert of matching NPC occupants while a human's entry task (a
+	// potential carjack) runs against their vehicle; see the definition.
+	void onPlayerEnterVehicle(IPlayer& player, IVehicle& vehicle, bool passenger) override;
+
 	void onVehicleDeath(IVehicle& vehicle, IPlayer& player) override;
 
 	// Exposed functions

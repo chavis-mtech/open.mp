@@ -257,6 +257,36 @@ void NPCComponent::onPoolEntryDestroyed(IVehicle& vehicle)
 	}
 }
 
+void NPCComponent::onPlayerEnterVehicle(IPlayer& player, IVehicle& vehicle, bool passenger)
+{
+	// NPC::enterVehicle emulates this same client RPC. The hold exists for the native
+	// drag task owned by a real jacker's client, not for NPC-to-NPC entry playback.
+	if (player.isBot())
+	{
+		return;
+	}
+
+	// A human announced an entry task for this vehicle. If one of our NPCs holds the
+	// corresponding seat type (driver or passenger), this may be a carjack: from here
+	// until the task resolves, the jacker's client owns the victim ped through its drag
+	// task, and the periodic re-assert of the NPC's unchanged seated pose snaps the
+	// victim back into the seat mid-drag.
+	// Hold the re-assert for the entry window (walk + door + drag; the 5800ms jack
+	// allowance in onTick is the same budget). Changed state still syncs immediately,
+	// and a cancelled entry simply lets the hold lapse.
+	constexpr Milliseconds EntryTaskWindow = Milliseconds(5800);
+	for (auto& _npc : storage)
+	{
+		auto npc = static_cast<NPC*>(_npc);
+		const bool matchingSeatType = passenger ? npc->getVehicleSeat() > 0 : npc->getVehicleSeat() == 0;
+		if (npc->getPlayer() != &player && npc->getVehicle()
+			&& npc->getVehicle()->getID() == vehicle.getID() && matchingSeatType)
+		{
+			npc->holdPeriodicInVehicleSync(EntryTaskWindow);
+		}
+	}
+}
+
 void NPCComponent::onVehicleDeath(IVehicle& vehicle, IPlayer& player)
 {
 	for (auto& _npc : storage)

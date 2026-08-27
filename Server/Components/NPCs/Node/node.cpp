@@ -223,7 +223,7 @@ Vector3 NPCNode::getPosition()
 	Vector3 normalPosition = Vector3(
 		static_cast<float>(pathNode.positionX) / 8.0f,
 		static_cast<float>(pathNode.positionY) / 8.0f,
-		static_cast<float>(pathNode.positionZ) / 8.0f + 1.2f);
+		static_cast<float>(pathNode.positionZ) / 8.0f + pointZOffset(currentPointId_));
 	return normalPosition;
 }
 
@@ -238,7 +238,21 @@ Vector3 NPCNode::getPosition(uint16_t pointId) const
 	return Vector3(
 		static_cast<float>(pathNode.positionX) / 8.0f,
 		static_cast<float>(pathNode.positionY) / 8.0f,
-		static_cast<float>(pathNode.positionZ) / 8.0f + 1.2f);
+		static_cast<float>(pathNode.positionZ) / 8.0f + pointZOffset(pointId));
+}
+
+float NPCNode::pointZOffset(uint16_t pointId) const
+{
+	// Path-node z is stored at road level. The historical +1.2 matches the ped sync
+	// origin (mid-torso) and is correct for PED points only. Node files store vehicle
+	// points first, then ped points, so the point id tells the two apart. A vehicle
+	// spawned or driver-synced at the ped offset hangs ~0.7m above the tarmac — and
+	// because clients keep unoccupied-vehicle physics asleep until something touches
+	// the car, a parked or abandoned one never settles: it visibly floats. Vehicle
+	// points therefore carry the chassis rest height instead.
+	constexpr float VehiclePointZOffset = 0.5f;
+	constexpr float PedPointZOffset = 1.2f;
+	return pointId < nodeHeader_.vehicleNodesNumber ? VehiclePointZOffset : PedPointZOffset;
 }
 
 int NPCNode::getNodesNumber() const
