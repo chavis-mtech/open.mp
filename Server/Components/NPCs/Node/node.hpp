@@ -85,6 +85,11 @@ public:
 	uint16_t getLinkCount() const;
 	uint16_t getLinkId(uint16_t pointId) const;
 	uint16_t getLinkCount(uint16_t pointId) const;
+	// Raw PathNode flags of a point (link count in bits 0-3, traffic level in 4-5, ...).
+	uint32_t getPathFlags(uint16_t pointId) const;
+	// Bits 4-5 of the flags: 0 = full traffic ... 3 = none. Level 3 marks car parks,
+	// driveways and other spurs the game itself never routes through-traffic into.
+	uint8_t getTrafficLevel(uint16_t pointId) const;
 	bool getLinkTarget(uint16_t linkId, uint16_t& areaId, uint16_t& pointId) const;
 	bool getNaviLinkTarget(uint16_t linkId, uint16_t& areaId, uint16_t& naviId) const;
 	bool getNaviNode(uint16_t naviId, NaviNode& naviNode) const;

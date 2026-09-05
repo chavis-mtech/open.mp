@@ -9,6 +9,7 @@
 #include "node.hpp"
 #include "../NPC/npc.hpp"
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <ghc/filesystem.hpp>
 #include <httplib.h>
@@ -148,6 +149,14 @@ bool NPCNode::initialize(ICore* core)
 	return true;
 }
 
+namespace
+{
+constexpr uint8_t NoTrafficLevel = 3;
+// Steepest grade GTA's road network actually drives (the Mulholland/SF hills sit
+// around 0.35); anything above is a footpath or a modelling seam between decks.
+constexpr float MaxDrivableGrade = 0.55f;
+}
+
 uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastArea, uint16_t lastPoint, uint16_t& currentLinkId)
 {
 	if (!initialized_)
@@ -163,7 +172,11 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastArea, uint16_
 	}
 
 	DynamicArray<uint16_t> forwardLinks;
+	DynamicArray<uint16_t> discouragedLinks;
 	DynamicArray<uint16_t> backtrackLinks;
+	const bool driving = npc->getNodeMoveType() == NPCMoveType_Drive;
+	const Vector3 fromPosition = getPosition(pointId);
+	const uint8_t fromTraffic = getTrafficLevel(pointId);
 	const uint32_t endLink = std::min<uint32_t>(
 		static_cast<uint32_t>(startLink) + linkCount, static_cast<uint32_t>(linkNodes_.size()));
 	for (uint32_t candidate = startLink; candidate < endLink; ++candidate)
@@ -174,12 +187,41 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastArea, uint16_
 			continue;
 		}
 		const bool backtrack = link.areaId == lastArea && link.nodeId == lastPoint;
-		(backtrack ? backtrackLinks : forwardLinks).push_back(static_cast<uint16_t>(candidate));
+		if (backtrack)
+		{
+			backtrackLinks.push_back(static_cast<uint16_t>(candidate));
+			continue;
+		}
+		// Same-area targets can be inspected; a link into another area is taken on trust.
+		bool discouraged = false;
+		if (driving && link.areaId == nodeId_ && link.nodeId < pathNodes_.size())
+		{
+			// Rockstar's own traffic never wanders into a traffic-level-3 spur (hospital
+			// car parks, driveways, garage aprons): those points exist for parked cars.
+			// A car already inside one may of course drive back out along it.
+			if (getTrafficLevel(link.nodeId) == NoTrafficLevel && fromTraffic != NoTrafficLevel)
+			{
+				discouraged = true;
+			}
+			// A link that climbs faster than any drivable road is a stairway or a
+			// retaining wall between two overlapping roads; driving it looks like a
+			// teleport (LS Unity station: +7.3m over 5.4m).
+			const Vector3 toPosition = getPosition(link.nodeId);
+			const float run = std::sqrt((toPosition.x - fromPosition.x) * (toPosition.x - fromPosition.x)
+				+ (toPosition.y - fromPosition.y) * (toPosition.y - fromPosition.y));
+			if (run > 0.5f && std::fabs(toPosition.z - fromPosition.z) / run > MaxDrivableGrade)
+			{
+				discouraged = true;
+			}
+		}
+		(discouraged ? discouragedLinks : forwardLinks).push_back(static_cast<uint16_t>(candidate));
 	}
-
 	// Exhaustively inspect every edge rather than hoping ten random draws find a valid
-	// directional lane. Only U-turn when this is a real dead end.
-	const auto& candidates = !forwardLinks.empty() ? forwardLinks : backtrackLinks;
+	// directional lane. Spurs and stairways only when the road offers nothing else;
+	// U-turn only at a real dead end.
+	const auto& candidates = !forwardLinks.empty() ? forwardLinks
+		: !discouragedLinks.empty()               ? discouragedLinks
+												  : backtrackLinks;
 	if (candidates.empty())
 	{
 		return InvalidPoint;
@@ -312,6 +354,16 @@ uint16_t NPCNode::getLinkId(uint16_t pointId) const
 	if (!initialized_ || pointId >= pathNodes_.size())
 		return 0;
 	return pathNodes_[pointId].linkId;
+}
+
+uint32_t NPCNode::getPathFlags(uint16_t pointId) const
+{
+	return pointId < pathNodes_.size() ? pathNodes_[pointId].flags : 0u;
+}
+
+uint8_t NPCNode::getTrafficLevel(uint16_t pointId) const
+{
+	return static_cast<uint8_t>((getPathFlags(pointId) >> 4) & 0x3);
 }
 
 uint16_t NPCNode::getLinkCount(uint16_t pointId) const

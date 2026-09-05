@@ -331,6 +331,8 @@ public:
 	// choosing links; movement uses the same metadata to stay in a directional lane.
 	bool resolveNodeLink(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
 		NaviNode& naviNode, bool& forward);
+	NPCMoveType getNodeMoveType() const { return nodeMoveType_; }
+
 	bool isNodeLinkTraversable(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint);
 	Vector3 nodeLinkPosition(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
 		const Vector3& fallback);

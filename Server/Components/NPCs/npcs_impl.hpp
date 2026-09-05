@@ -148,6 +148,7 @@ public:
 
 	/// Get the position of a specific point in a node
 	bool getNodePointPosition(int nodeId, Vector3& position) override;
+	bool getNodePointFlags(int nodeId, uint32_t& flags) override;
 
 	/// Get the total number of points in a node
 	int getNodePointCount(int nodeId) override;

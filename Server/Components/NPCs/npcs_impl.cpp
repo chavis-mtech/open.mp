@@ -526,6 +526,18 @@ bool NPCComponent::getNodePointPosition(int nodeId, Vector3& position)
 	return false;
 }
 
+bool NPCComponent::getNodePointFlags(int nodeId, uint32_t& flags)
+{
+	NPCNode* node = nodeManager_.getNode(nodeId);
+	if (node)
+	{
+		flags = node->getPathFlags(node->getPointId());
+		return true;
+	}
+	flags = 0;
+	return false;
+}
+
 int NPCComponent::getNodePointCount(int nodeId)
 {
 	NPCNode* node = nodeManager_.getNode(nodeId);
