@@ -135,13 +135,21 @@ they are genuinely good and should be reconsidered once there is a way to check 
 ```bash
 cd third_party/open.mp-server
 git fetch upstream
+git rev-list --count serve-m..upstream/master   # 0 = already level, stop here
 git merge upstream/master          # conflicts, if any, will be in the files listed above
 git submodule update --init --recursive            # upstream can bump any nested dependency
-cmake --build build-linux-x86_64 -j"$(nproc)"
-cd ../../gamemode && ./scripts/dev_build.sh && (cd build/linux-tests && ctest)
+cd ../../gamemode && build/linux/tools/servem/servem build && build/linux/tools/servem/servem test
 git -C ../third_party/open.mp-server push origin serve-m
 git -C .. add third_party/open.mp-server && git -C .. commit   # bump the gitlink
 ```
+
+Upstream's `master` is the only branch to follow: `stable`, `ksn/fix-spawn` and
+`ksn/fix-timers` are already merged into it, and the remaining branches
+(`Alasnkz/npc`, `amir/*`, `hual/*`, `Y_Less/*`) are 2022-2024 experiments nobody ships.
+The SDK submodule follows the same rule: upstream's pointer must stay an ancestor of our
+`serve-m` SDK branch (`git -C SDK merge-base --is-ancestor <upstream ptr> serve-m`).
+
+Last checked level with upstream: 2026-09-05 (upstream head `91a38854`, 2026-08-11).
 
 Resolving a conflict: section A means upstream's line is wrong and ours should win —
 unless upstream fixed it themselves, in which case take theirs and delete the row above.
