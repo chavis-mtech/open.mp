@@ -150,3 +150,20 @@ Section B means both are right and the two intents have to be combined by hand.
 Never resolve an NPC conflict by taking one side wholesale without reading section B. The
 two lines that were reconciled in `5cb485cd` diverged precisely because that felt easier
 than merging at the time.
+
+### B4. Through-traffic stays out of no-traffic spurs and off stairway links (`a5c0f36a`)
+
+`NPCNode::process` used to pick any forward link at random. Two facts from the real
+NODES data made that visibly wrong: traffic-level-3 points (bits 4-5 of the PathNode
+flags; 489 of 14188 vehicle points, 148 road→spur links) are car parks, driveways and
+garage aprons that Rockstar's own traffic never enters, and 18 same-area links climb
+steeper than a 0.55 grade (LS Unity station: +7.3 m over 5.4 m). Links are now tiered:
+normal forward → spur/stairway → U-turn. A car already inside a spur still drives back
+out along it. `INPCComponent::getNodePointFlags()` exposes the raw flags (SDK `fefd622`).
+
+### B5. Per-link height follows the incoming slope (`f20e5285`)
+
+The chord between two nodes sits under the road on a crest and above it in a dip. With
+the previous node known (`previousMoveStartPosition_`), `heightAlongLinkCurved` leaves
+the start at the arriving slope and still reaches the end node exactly; the bulge over
+the chord is capped at 1.2 m so a stairway link cannot fling the next link upward.
