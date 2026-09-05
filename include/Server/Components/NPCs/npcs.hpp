@@ -503,6 +503,9 @@ struct INPCComponent : public IPool<INPC>, public INetworkComponent
 	/// Get the position of a specific point in a node
 	virtual bool getNodePointPosition(int nodeId, Vector3& position) = 0;
 
+	/// Raw PathNode flags of the current point (traffic level in bits 4-5: 3 = no through traffic)
+	virtual bool getNodePointFlags(int nodeId, uint32_t& flags) = 0;
+
 	/// Get the total number of points in a node
 	virtual int getNodePointCount(int nodeId) = 0;
 
