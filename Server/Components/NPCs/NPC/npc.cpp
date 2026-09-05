@@ -2653,6 +2653,13 @@ void NPC::advance(TimePoint now)
 		const float headingStep = glm::clamp(driveHeadingError,
 			-MaxSteeringDegreesPerSecond * deltaTimeSEC, MaxSteeringDegreesPerSecond * deltaTimeSEC);
 		rotation.z = std::fmod(rotation.z + headingStep + 360.0f, 360.0f);
+		// Level, explicitly. Pitch and roll are never set for a driven car, and a tilt that
+		// slipped in (a seat taken over a vehicle a client had rolled, quaternion round
+		// trips) would otherwise be carried forever - one car drove the tunnel with its
+		// tail in the air. Road-following pitch is a separate change, once the sign of
+		// the client's pitch axis has been read off a real driver (player_vehicle_pitch).
+		rotation.x = 0.0f;
+		rotation.y = 0.0f;
 		rotation_ = GTAQuat(rotation);
 
 		if (driveHeadingError > SteeringDeadZoneDegrees)
@@ -2893,10 +2900,20 @@ void NPC::advance(TimePoint now)
 				? velocity_ * deltaTimeMS
 				: (toTarget / distanceToTarget) * velocityLength * deltaTimeMS;
 			const float step = std::sqrt(travelled.x * travelled.x + travelled.y * travelled.y);
-			if (step > 4.0f)
+			// A jump is distance the speed does not explain. A long tick moves a fast car a
+			// long way legitimately; that is its own anomaly, and the thing to fix is the
+			// tick, not the step.
+			const float speed = std::sqrt(velocity_.x * velocity_.x + velocity_.y * velocity_.y);
+			if (deltaTimeMS > 1500.0f)
 			{
 				char detail[64];
-				snprintf(detail, sizeof(detail), "step=%.1fm dt=%.0fms", step, deltaTimeMS);
+				snprintf(detail, sizeof(detail), "dt=%.0fms step=%.1fm", deltaTimeMS, step);
+				noteAnomaly("tick_gap", detail);
+			}
+			else if (step > 4.0f && step > speed * deltaTimeMS * 1.5f + 1.0f)
+			{
+				char detail[64];
+				snprintf(detail, sizeof(detail), "step=%.1fm dt=%.0fms speed=%.2f", step, deltaTimeMS, speed);
 				noteAnomaly("position_jump", detail);
 			}
 			if (moveType_ == NPCMoveType_Drive && std::fabs(velocity_.z * deltaTimeMS) > 1.5f)

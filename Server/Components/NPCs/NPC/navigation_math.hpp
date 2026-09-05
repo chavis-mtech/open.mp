@@ -91,7 +91,11 @@ inline float heightAlongLink(float startZ, float endZ, float horizontalProgress)
 // link. With the previous node known, the link is a quadratic that leaves the start at
 // the slope the car arrived on and still reaches the end node exactly. The bulge over
 // the chord is capped: a stairway or a bad previous link must not fling the car upward.
-constexpr float MaxLinkBulge = 1.2f;
+// A ramp into a tunnel or off a bridge is a steep link followed by a flat one: carrying
+// the whole incoming slope into the flat link buried a car to its windows at the LS
+// tunnel mouth. Half the tangent, and a bulge no deeper than a wheel.
+constexpr float TangentCarry = 0.5f;
+constexpr float MaxLinkBulge = 0.35f;
 
 inline float heightAlongLinkCurved(
 	float previousZ, float previousRun, float startZ, float endZ, float run, float horizontalProgress)
@@ -103,7 +107,7 @@ inline float heightAlongLinkCurved(
 	}
 	const float rise = endZ - startZ;
 	// Tangent at the start, expressed as a rise over this link's whole run.
-	float startTangent = (startZ - previousZ) / previousRun * run;
+	float startTangent = (startZ - previousZ) / previousRun * run * TangentCarry;
 	// z(t) = startZ + a*t + b*t^2 with a = tangent, a + b = rise. Deviation from the chord
 	// is (a - rise) * t * (1 - t), peaking at a quarter of (a - rise) at mid-link.
 	const float maxTangentExcess = MaxLinkBulge * 4.0f;
