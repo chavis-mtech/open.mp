@@ -151,7 +151,7 @@ Never resolve an NPC conflict by taking one side wholesale without reading secti
 two lines that were reconciled in `5cb485cd` diverged precisely because that felt easier
 than merging at the time.
 
-### B4. Through-traffic stays out of no-traffic spurs and off stairway links (`a5c0f36a`)
+## B4. Through-traffic stays out of no-traffic spurs and off stairway links (`a5c0f36a`)
 
 `NPCNode::process` used to pick any forward link at random. Two facts from the real
 NODES data made that visibly wrong: traffic-level-3 points (bits 4-5 of the PathNode
@@ -161,7 +161,7 @@ steeper than a 0.55 grade (LS Unity station: +7.3 m over 5.4 m). Links are now t
 normal forward → spur/stairway → U-turn. A car already inside a spur still drives back
 out along it. `INPCComponent::getNodePointFlags()` exposes the raw flags (SDK `fefd622`).
 
-### B5. Per-link height follows the incoming slope (`f20e5285`)
+## B5. Per-link height follows the incoming slope (`f20e5285`)
 
 The chord between two nodes sits under the road on a crest and above it in a dip. With
 the previous node known (`previousMoveStartPosition_`), `heightAlongLinkCurved` leaves
