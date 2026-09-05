@@ -83,6 +83,26 @@ Expected to stay in the fork.
   native drag on the jacker's screen is not interrupted by the victim snapping back into
   the seat. Changed state still syncs immediately; a cancelled entry lets the hold lapse.
 
+## B2. Lane centring and link height (`navigation_math.hpp`)
+
+Two pieces of driving arithmetic moved out of `npc.cpp` into a header with no dependencies, so
+they could be tested (from SERVE-M's `platform_policy_tests`, which includes this directory).
+Both were wrong in a way only a client shows, and a client finally showed it.
+
+- **Lane offset.** The old formula, `width + 3.5 * (0.5 + lane)`, read the navi node's
+  width byte as a median and treated every road as two-way. Checked against all 64
+  `NODES*.DAT` files the game ships: the width byte is zero on 97% of nodes and is a WIDTH
+  where it is not; ~19,000 navi nodes are two-way `(1,1)` and ~12,000 are one-way with
+  lanes on one side only. On a one-way carriageway the navi node is the carriageway's own
+  centre, so the outer lane of a two-lane freeway landed 1.75 m past the edge - on the
+  retaining wall, as photographed. One-way roads are now centred on the node; a stated
+  width bounds every lane inside the road.
+- **Height along a link.** `advance()` steered z toward the target at a rate clamped to
+  ±35% of horizontal speed. Any ramp steeper than that had the car climb slower than the
+  road and drive into it, then snap up at the node; downhill it floated. Height is now read
+  off the link by horizontal progress (`moveStartPosition_` → `targetPosition_`), which is
+  what a straight piece of road between two dense nodes actually is.
+
 ## C. Considered and deliberately not taken
 
 From the earlier `serve-m` line (`8860acca`), reconciled in `49f19f64`. Recorded because

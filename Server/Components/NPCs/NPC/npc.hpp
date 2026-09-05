@@ -483,6 +483,9 @@ private:
 	float moveSpeed_;
 	float stopRange_;
 	Vector3 targetPosition_;
+	// Where the current move began. A driver's height is interpolated along the link from
+	// here to targetPosition_ (see navigation_math.hpp) instead of being steered toward it.
+	Vector3 moveStartPosition_;
 	Vector3 velocity_;
 	bool moving_;
 	bool needsVelocityUpdate_;

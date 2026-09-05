@@ -7,6 +7,7 @@
  */
 
 #include "npc.hpp"
+#include "navigation_math.hpp"
 #include <netcode.hpp>
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -71,6 +72,7 @@ NPC::NPC(NPCComponent* component, IPlayer* playerPtr)
 	, moveSpeed_(0.0f)
 	, stopRange_(0.2f)
 	, targetPosition_({ 0.0f, 0.0f, 0.0f })
+	, moveStartPosition_({ 0.0f, 0.0f, 0.0f })
 	, velocity_({ 0.0f, 0.0f, 0.0f })
 	, moving_(false)
 	, needsVelocityUpdate_(false)
@@ -549,6 +551,7 @@ bool NPC::move(Vector3 pos, NPCMoveType moveType, float moveSpeed, float stopRan
 	}
 
 	// Set internal variables
+	moveStartPosition_ = position;
 	targetPosition_ = pos;
 	stopRange_ = stopRange;
 	moving_ = true;
@@ -2653,7 +2656,21 @@ void NPC::advance(TimePoint now)
 		const float headingRadians = glm::radians(rotation.z);
 		velocity_.x = -std::sin(headingRadians) * speedPerMillisecond;
 		velocity_.y = std::cos(headingRadians) * speedPerMillisecond;
-		velocity_.z = glm::clamp(toTarget.z / distanceToTarget, -0.35f, 0.35f) * speedPerMillisecond;
+		// Height is not steered: it is read off the link. Two nodes are joined by a straight
+		// piece of road whose height changes linearly, so the car's z is decided by how far
+		// along that link it has got. The old ±0.35 slope clamp made the car climb slower
+		// than any real ramp and drive into it, then snap up at the node; downhill it floated.
+		const float linkDx = targetPosition_.x - moveStartPosition_.x;
+		const float linkDy = targetPosition_.y - moveStartPosition_.y;
+		const float linkLength = std::sqrt(linkDx * linkDx + linkDy * linkDy);
+		const float doneDx = position.x - moveStartPosition_.x;
+		const float doneDy = position.y - moveStartPosition_.y;
+		const float travelled = std::sqrt(doneDx * doneDx + doneDy * doneDy);
+		const float wantedZ = npc_navigation::heightAlongLink(
+			moveStartPosition_.z, targetPosition_.z, npc_navigation::linkProgress(travelled, linkLength));
+		// Expressed as a velocity so the existing integration applies it; deltaTimeMS is the
+		// same interval the horizontal step is about to use.
+		velocity_.z = (wantedZ - position.z) / std::max(deltaTimeMS, 1.0f);
 	}
 	float velocityLength = glm::length(velocity_);
 	auto maxTravel = velocityLength * deltaTimeMS;
@@ -3541,7 +3558,6 @@ Vector3 NPC::nodeLinkPosition(const NPCNode& sourceNode, uint16_t linkId, uint16
 		return fallback;
 	}
 
-	constexpr float LaneWidth = 3.5f;
 	float directionX = static_cast<float>(static_cast<int8_t>(naviNode.directionX)) / 100.0f;
 	float directionY = static_cast<float>(static_cast<int8_t>(naviNode.directionY)) / 100.0f;
 	if (!forward)
@@ -3556,17 +3572,15 @@ Vector3 NPC::nodeLinkPosition(const NPCNode& sourceNode, uint16_t linkId, uint16
 	}
 	directionX /= length;
 	directionY /= length;
-	const float medianWidth = static_cast<float>(naviNode.flags & 0xFF) / 8.0f;
-	const uint8_t leftLanes = static_cast<uint8_t>((naviNode.flags >> 8) & 0x7);
-	const uint8_t rightLanes = static_cast<uint8_t>((naviNode.flags >> 11) & 0x7);
-	const uint8_t laneCount = forward ? rightLanes : leftLanes;
+	const auto road = npc_navigation::RoadLanes::fromNaviFlags(naviNode.flags);
+	const uint8_t laneCount = forward ? road.rightLanes : road.leftLanes;
 	// Keep a stable per-NPC lane preference. On roads with two or more lanes this
-	// naturally distributes traffic instead of stacking every vehicle in lane one;
-	// clamping preserves continuity when a road narrows.
-	const uint8_t laneIndex = laneCount > 0
-		? static_cast<uint8_t>(std::min<int>(player_->getID() % 2, laneCount - 1))
-		: 0;
-	const float laneOffset = medianWidth + LaneWidth * (0.5f + static_cast<float>(laneIndex));
+	// naturally distributes traffic instead of stacking every vehicle in lane one.
+	const uint8_t laneIndex = static_cast<uint8_t>(player_->getID() % 2);
+	// See navigation_math.hpp: one-way carriageways are centred on the navi node, two-way
+	// roads have it on the centreline, and the width byte is a width rather than a median.
+	// Getting any of those wrong put cars on kerbs and retaining walls.
+	const float laneOffset = npc_navigation::laneOffset(road, laneCount, laneIndex);
 	// Right-hand traffic: (dy, -dx) is the right normal of the travel vector.
 	return Vector3(
 		static_cast<float>(naviNode.positionX) / 8.0f + directionY * laneOffset,
