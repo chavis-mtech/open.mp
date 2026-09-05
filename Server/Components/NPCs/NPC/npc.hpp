@@ -488,6 +488,9 @@ private:
 	// Where the current move began. A driver's height is interpolated along the link from
 	// here to targetPosition_ (see navigation_math.hpp) instead of being steered toward it.
 	Vector3 moveStartPosition_;
+	// Start of the link before this one while playing nodes; gives the incoming slope.
+	Vector3 previousMoveStartPosition_;
+	bool hasPreviousLink_ = false;
 	Vector3 velocity_;
 	bool moving_;
 	bool needsVelocityUpdate_;

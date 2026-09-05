@@ -552,6 +552,11 @@ bool NPC::move(Vector3 pos, NPCMoveType moveType, float moveSpeed, float stopRan
 	}
 
 	// Set internal variables
+	// Consecutive node-playback moves start where the previous link ended, so the old
+	// start is the previous node: remembered for the height curve. Anything else
+	// (a scripted move, a restart) has no previous link worth trusting.
+	hasPreviousLink_ = playingNode_ && moving_;
+	previousMoveStartPosition_ = moveStartPosition_;
 	moveStartPosition_ = position;
 	targetPosition_ = pos;
 	stopRange_ = stopRange;
@@ -2682,8 +2687,20 @@ void NPC::advance(TimePoint now)
 		// origin sits ~0.7 above its tyres, a truck's 1.5-2.0. Lift the TARGET by this model's
 		// own rest height; the start already carries it after the first leg, so the correction
 		// is a smooth climb out of the spawn pose and then flat.
-		const float wantedZ = npc_navigation::heightAlongLink(
-			moveStartPosition_.z, targetPosition_.z + restDelta, npc_navigation::linkProgress(travelled, linkLength));
+		const float progress = npc_navigation::linkProgress(travelled, linkLength);
+		float wantedZ = 0.0f;
+		if (hasPreviousLink_)
+		{
+			const float previousDx = moveStartPosition_.x - previousMoveStartPosition_.x;
+			const float previousDy = moveStartPosition_.y - previousMoveStartPosition_.y;
+			wantedZ = npc_navigation::heightAlongLinkCurved(previousMoveStartPosition_.z,
+				std::sqrt(previousDx * previousDx + previousDy * previousDy), moveStartPosition_.z,
+				targetPosition_.z + restDelta, linkLength, progress);
+		}
+		else
+		{
+			wantedZ = npc_navigation::heightAlongLink(moveStartPosition_.z, targetPosition_.z + restDelta, progress);
+		}
 		// Expressed as a velocity so the existing integration applies it; deltaTimeMS is the
 		// same interval the horizontal step is about to use.
 		velocity_.z = (wantedZ - position.z) / std::max(deltaTimeMS, 1.0f);

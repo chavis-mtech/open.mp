@@ -86,6 +86,31 @@ inline float heightAlongLink(float startZ, float endZ, float horizontalProgress)
 	return startZ + (endZ - startZ) * t;
 }
 
+// The chord between two path nodes sits under the road on a crest and above it in a dip;
+// nodes are 10-30m apart, so a car on a hill drove half-buried or on air for most of a
+// link. With the previous node known, the link is a quadratic that leaves the start at
+// the slope the car arrived on and still reaches the end node exactly. The bulge over
+// the chord is capped: a stairway or a bad previous link must not fling the car upward.
+constexpr float MaxLinkBulge = 1.2f;
+
+inline float heightAlongLinkCurved(
+	float previousZ, float previousRun, float startZ, float endZ, float run, float horizontalProgress)
+{
+	const float t = std::clamp(horizontalProgress, 0.0f, 1.0f);
+	if (previousRun < 0.5f || run < 0.5f)
+	{
+		return heightAlongLink(startZ, endZ, t);
+	}
+	const float rise = endZ - startZ;
+	// Tangent at the start, expressed as a rise over this link's whole run.
+	float startTangent = (startZ - previousZ) / previousRun * run;
+	// z(t) = startZ + a*t + b*t^2 with a = tangent, a + b = rise. Deviation from the chord
+	// is (a - rise) * t * (1 - t), peaking at a quarter of (a - rise) at mid-link.
+	const float maxTangentExcess = MaxLinkBulge * 4.0f;
+	startTangent = std::clamp(startTangent, rise - maxTangentExcess, rise + maxTangentExcess);
+	return startZ + startTangent * t + (rise - startTangent) * t * t;
+}
+
 // How far along a link the vehicle is, from the horizontal distance covered and the link's
 // horizontal length. Horizontal on purpose: measuring progress in 3D lets the z error feed
 // back into itself.
