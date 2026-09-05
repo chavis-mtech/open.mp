@@ -167,3 +167,12 @@ The chord between two nodes sits under the road on a crest and above it in a dip
 the previous node known (`previousMoveStartPosition_`), `heightAlongLinkCurved` leaves
 the start at the arriving slope and still reaches the end node exactly; the bulge over
 the chord is capped at 1.2 m so a stairway link cannot fling the next link upward.
+
+## B6. The component says what went wrong
+
+`NPC::noteAnomaly` writes one `[NPC] anomaly=<key> id=… pos=… <detail>` warning per NPC
+per five seconds: `position_jump` (>4 m in a tick), `height_gap` (>1.5 m of z in a tick
+while driving), `node_playback_stopped reason=link_target_missing|change_node_invalid|
+node_open_failed|no_link|first_link_unreachable|first_point_invalid`. `[NPC] link_tier=
+spur_or_stairway|u_turn` (debug) marks every time playback had to take a second-tier link.
+`servem report` counts all of these.

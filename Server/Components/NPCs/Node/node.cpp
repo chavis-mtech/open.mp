@@ -222,6 +222,10 @@ uint16_t NPCNode::process(NPC* npc, uint16_t pointId, uint16_t lastArea, uint16_
 	const auto& candidates = !forwardLinks.empty() ? forwardLinks
 		: !discouragedLinks.empty()               ? discouragedLinks
 												  : backtrackLinks;
+	if (forwardLinks.empty() && !candidates.empty())
+	{
+		npc->noteLinkTier(discouragedLinks.empty() ? "u_turn" : "spur_or_stairway", pointId);
+	}
 	if (candidates.empty())
 	{
 		return InvalidPoint;

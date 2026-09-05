@@ -230,6 +230,7 @@ public:
 	bool playNode(int nodeId, NPCMoveType moveType, float moveSpeed = NPC_MOVE_SPEED_AUTO, float radius = 0.0f, bool setAngle = true) override;
 
 	void stopPlayingNode() override;
+	void stopPlayingNodeBecause(const char* reason);
 
 	void pausePlayingNode() override;
 
@@ -332,6 +333,12 @@ public:
 	bool resolveNodeLink(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
 		NaviNode& naviNode, bool& forward);
 	NPCMoveType getNodeMoveType() const { return nodeMoveType_; }
+
+	// One warning line per NPC per five seconds: "[NPC] anomaly=<key> id=... <detail>".
+	// The keys are stable so a log scan can count them.
+	void noteAnomaly(const char* key, const char* detail);
+	// Node playback chose something other than a plain forward link.
+	void noteLinkTier(const char* tier, uint16_t fromPoint);
 
 	bool isNodeLinkTraversable(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint);
 	Vector3 nodeLinkPosition(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint,
@@ -491,6 +498,7 @@ private:
 	// Start of the link before this one while playing nodes; gives the incoming slope.
 	Vector3 previousMoveStartPosition_;
 	bool hasPreviousLink_ = false;
+	TimePoint lastAnomalyLog_ {};
 	Vector3 velocity_;
 	bool moving_;
 	bool needsVelocityUpdate_;

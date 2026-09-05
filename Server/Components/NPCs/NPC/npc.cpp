@@ -1,3 +1,4 @@
+#include <cstdio>
 /*
  *  This Source Code Form is subject to the terms of the Mozilla Public License,
  *  v. 2.0. If a copy of the MPL was not distributed with this file, You can
@@ -2832,7 +2833,7 @@ void NPC::advance(TimePoint now)
 					uint16_t targetPointId = 0;
 					if (!currentNode_->getLinkTarget(currentLinkId, targetNodeId, targetPointId))
 					{
-						stopPlayingNode();
+						stopPlayingNodeBecause("link_target_missing");
 						return;
 					}
 					if (npcComponent_->getNodeManager()->isNodeOpen(targetNodeId)
@@ -2852,12 +2853,12 @@ void NPC::advance(TimePoint now)
 						}
 						else
 						{
-							stopPlayingNode();
+							stopPlayingNodeBecause("change_node_invalid");
 						}
 					}
 					else
 					{
-						stopPlayingNode();
+						stopPlayingNodeBecause("node_open_failed");
 					}
 				}
 				else if (newPoint != NPCNode::InvalidPoint)
@@ -2872,7 +2873,7 @@ void NPC::advance(TimePoint now)
 				else
 				{
 					// Node processing failed or reached end
-					stopPlayingNode();
+					stopPlayingNodeBecause("no_link");
 				}
 			}
 			else
@@ -2891,6 +2892,19 @@ void NPC::advance(TimePoint now)
 			auto travelled = moveType_ == NPCMoveType_Drive
 				? velocity_ * deltaTimeMS
 				: (toTarget / distanceToTarget) * velocityLength * deltaTimeMS;
+			const float step = std::sqrt(travelled.x * travelled.x + travelled.y * travelled.y);
+			if (step > 4.0f)
+			{
+				char detail[64];
+				snprintf(detail, sizeof(detail), "step=%.1fm dt=%.0fms", step, deltaTimeMS);
+				noteAnomaly("position_jump", detail);
+			}
+			if (moveType_ == NPCMoveType_Drive && std::fabs(velocity_.z * deltaTimeMS) > 1.5f)
+			{
+				char detail[64];
+				snprintf(detail, sizeof(detail), "dz=%.2fm in one tick", velocity_.z * deltaTimeMS);
+				noteAnomaly("height_gap", detail);
+			}
 			position_ = position + travelled;
 		}
 	}
@@ -3382,7 +3396,7 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 		if (!currentNode_->getLinkTarget(currentLinkId, targetNodeId, targetPointId)
 			|| (!npcComponent_->getNodeManager()->isNodeOpen(targetNodeId) && !npcComponent_->openNode(targetNodeId)))
 		{
-			stopPlayingNode();
+			stopPlayingNodeBecause("first_link_unreachable");
 			return false;
 		}
 		NPCNode* targetNode = npcComponent_->getNodeManager()->getNode(targetNodeId);
@@ -3392,7 +3406,7 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 	}
 	if (nextPoint == NPCNode::InvalidPoint)
 	{
-		stopPlayingNode();
+		stopPlayingNodeBecause("first_point_invalid");
 		return false;
 	}
 	if (nextPosition == Vector3 {})
@@ -3406,6 +3420,43 @@ bool NPC::playNode(int nodeId, NPCMoveType moveType, float moveSpeed, float radi
 	move(nextPosition, moveType, moveSpeed, radius);
 
 	return true;
+}
+
+void NPC::noteAnomaly(const char* key, const char* detail)
+{
+	if (!npcComponent_ || !npcComponent_->getCore())
+	{
+		return;
+	}
+	const TimePoint now = Time::now();
+	if (lastAnomalyLog_ != TimePoint {} && now - lastAnomalyLog_ < Seconds(5))
+	{
+		return;
+	}
+	lastAnomalyLog_ = now;
+	const Vector3 pos = getPosition();
+	npcComponent_->getCore()->logLn(LogLevel::Warning, "[NPC] anomaly=%s id=%d pos=(%.1f,%.1f,%.1f) %s", key,
+		getID(), pos.x, pos.y, pos.z, detail);
+}
+
+void NPC::noteLinkTier(const char* tier, uint16_t fromPoint)
+{
+	if (!npcComponent_ || !npcComponent_->getCore())
+	{
+		return;
+	}
+	const Vector3 pos = getPosition();
+	npcComponent_->getCore()->logLn(LogLevel::Debug, "[NPC] link_tier=%s id=%d area=%d point=%u pos=(%.1f,%.1f,%.1f)", tier,
+		getID(), currentNode_ ? currentNode_->getNodeId() : -1, unsigned(fromPoint), pos.x, pos.y, pos.z);
+}
+
+void NPC::stopPlayingNodeBecause(const char* reason)
+{
+	char detail[96];
+	snprintf(detail, sizeof(detail), "reason=%s area=%d point=%u", reason, currentNode_ ? currentNode_->getNodeId() : -1,
+		unsigned(currentNodePoint_));
+	noteAnomaly("node_playback_stopped", detail);
+	stopPlayingNode();
 }
 
 void NPC::stopPlayingNode()
