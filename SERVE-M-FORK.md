@@ -149,6 +149,14 @@ Upstream's `master` is the only branch to follow: `stable`, `ksn/fix-spawn` and
 The SDK submodule follows the same rule: upstream's pointer must stay an ancestor of our
 `serve-m` SDK branch (`git -C SDK merge-base --is-ancestor <upstream ptr> serve-m`).
 
+The SDK has no fork of its own on GitHub, so our SDK commits live as branch
+`sdk/serve-m` of this same repository and `.gitmodules` points the submodule at
+`../open.mp` (relative: resolves to the repository this fork is cloned from). A fresh
+`git clone --recurse-submodules git@github.com:chavis-mtech/open.mp.git -b serve-m`
+therefore works without any extra remote. To publish a new SDK commit:
+`git -C SDK push fork serve-m:sdk/serve-m`. If a real fork of open.mp-sdk is created
+later, change the url here and in `.gitmodules` and delete the branch.
+
 Last checked level with upstream: 2026-09-05 (upstream head `91a38854`, 2026-08-11).
 
 Resolving a conflict: section A means upstream's line is wrong and ours should win —

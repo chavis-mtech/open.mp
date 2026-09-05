@@ -18,7 +18,8 @@
 	url = https://github.com/openmultiplayer/cmake-conan.git
 [submodule "SDK"]
 	path = SDK
-	url = https://github.com/openmultiplayer/open.mp-sdk
+	url = ../open.mp
+	branch = sdk/serve-m
 [submodule "Shared/Network"]
 	path = Shared/Network
 	url = https://github.com/openmultiplayer/open.mp-network
