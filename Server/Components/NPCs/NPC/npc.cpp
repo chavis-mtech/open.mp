@@ -8,6 +8,7 @@
 
 #include "npc.hpp"
 #include "navigation_math.hpp"
+#include "vehicle_rest_height.hpp"
 #include <netcode.hpp>
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -2620,6 +2621,16 @@ void NPC::advance(TimePoint now)
 	}
 
 	auto toTarget = targetPosition_ - position;
+	// A driven vehicle rides above its target by its model's rest height (see the drive
+	// branch below). Measure arrival against where the car will actually be, or a tall
+	// truck stays a metre "away" from every node forever and never advances the route.
+	float restDelta = 0.0f;
+	if (moveType_ == NPCMoveType_Drive && vehicle_ && vehicleSeat_ == 0)
+	{
+		restDelta = npc_navigation::vehicleRestHeight(vehicle_->getModel())
+			- npc_navigation::DefaultVehicleRestHeight;
+		toTarget.z += restDelta;
+	}
 	float distanceToTarget = glm::length(toTarget);
 	float driveHeadingError = 0.0f;
 	if (moveType_ == NPCMoveType_Drive && vehicle_ && vehicleSeat_ == 0 && distanceToTarget > FLT_EPSILON)
@@ -2666,8 +2677,13 @@ void NPC::advance(TimePoint now)
 		const float doneDx = position.x - moveStartPosition_.x;
 		const float doneDy = position.y - moveStartPosition_.y;
 		const float travelled = std::sqrt(doneDx * doneDx + doneDy * doneDy);
+		// Every drive target arrives at road + 0.5 (the node point's chassis offset, or a
+		// route polyline built from those points). 0.5 is right for almost nothing: a saloon's
+		// origin sits ~0.7 above its tyres, a truck's 1.5-2.0. Lift the TARGET by this model's
+		// own rest height; the start already carries it after the first leg, so the correction
+		// is a smooth climb out of the spawn pose and then flat.
 		const float wantedZ = npc_navigation::heightAlongLink(
-			moveStartPosition_.z, targetPosition_.z, npc_navigation::linkProgress(travelled, linkLength));
+			moveStartPosition_.z, targetPosition_.z + restDelta, npc_navigation::linkProgress(travelled, linkLength));
 		// Expressed as a velocity so the existing integration applies it; deltaTimeMS is the
 		// same interval the horizontal step is about to use.
 		velocity_.z = (wantedZ - position.z) / std::max(deltaTimeMS, 1.0f);
