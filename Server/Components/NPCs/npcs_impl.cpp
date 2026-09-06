@@ -544,6 +544,55 @@ int NPCComponent::getNodePointCount(int nodeId)
 	return node ? node->getNodesNumber() : 0;
 }
 
+int NPCComponent::getNodePointLinks(int nodeId, uint16_t pointId, NodePointLink* out, int max)
+{
+	NPCNode* node = nodeManager_.getNode(nodeId);
+	if (!node || out == nullptr || max <= 0)
+	{
+		return 0;
+	}
+	const uint16_t first = node->getLinkId(pointId);
+	const uint16_t count = node->getLinkCount(pointId);
+	int written = 0;
+	for (uint16_t i = 0; i < count && written < max; ++i)
+	{
+		uint16_t areaId = 0;
+		uint16_t target = 0;
+		if (!node->getLinkTarget(static_cast<uint16_t>(first + i), areaId, target))
+		{
+			break;
+		}
+		out[written].areaId = areaId;
+		out[written].pointId = target;
+		++written;
+	}
+	return written;
+}
+
+bool NPCComponent::getNodePointPositionAt(int nodeId, uint16_t pointId, Vector3& position)
+{
+	NPCNode* node = nodeManager_.getNode(nodeId);
+	if (!node || pointId >= node->getNodesNumber())
+	{
+		position = Vector3(0.0f, 0.0f, 0.0f);
+		return false;
+	}
+	position = node->getPosition(pointId);
+	return true;
+}
+
+bool NPCComponent::getNodePointFlagsAt(int nodeId, uint16_t pointId, uint32_t& flags)
+{
+	NPCNode* node = nodeManager_.getNode(nodeId);
+	if (!node || pointId >= node->getNodesNumber())
+	{
+		flags = 0;
+		return false;
+	}
+	flags = node->getPathFlags(pointId);
+	return true;
+}
+
 bool NPCComponent::getNodeInfo(int nodeId, uint32_t& vehicleNodes, uint32_t& pedNodes, uint32_t& naviNodes)
 {
 	NPCNode* node = nodeManager_.getNode(nodeId);

@@ -156,6 +156,10 @@ public:
 	/// Get node information (vehicle nodes, pedestrian nodes, navigation nodes)
 	bool getNodeInfo(int nodeId, uint32_t& vehicleNodes, uint32_t& pedNodes, uint32_t& naviNodes) override;
 
+	int getNodePointLinks(int nodeId, uint16_t pointId, NodePointLink* out, int max) override;
+	bool getNodePointPositionAt(int nodeId, uint16_t pointId, Vector3& position) override;
+	bool getNodePointFlagsAt(int nodeId, uint16_t pointId, uint32_t& flags) override;
+
 	bool emulatePlayerGiveDamageToNPCEvent(IPlayer& player, INPC& npc, float amount, unsigned weapon, BodyPart part, bool callOriginalEvents);
 
 	bool emulatePlayerTakeDamageFromNPCEvent(IPlayer& player, INPC& npc, float amount, unsigned weapon, BodyPart part, bool callOriginalEvents);
