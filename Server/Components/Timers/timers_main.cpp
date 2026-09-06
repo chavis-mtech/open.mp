@@ -42,6 +42,14 @@ public:
 
 		for (auto timer : timers)
 		{
+			// A timer that was killed but not yet swept by onTick still points at its
+			// handler. Other components (and their handlers) are freed before this
+			// destructor runs, so calling free() on it here was a use-after-free
+			// (general protection fault in Timers.so on every shutdown).
+			if (!timer->running())
+			{
+				timer->detach();
+			}
 			delete timer;
 		}
 		timers.clear();

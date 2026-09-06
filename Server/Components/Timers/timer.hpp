@@ -15,7 +15,7 @@ private:
 	unsigned int count_;
 	const Milliseconds interval_;
 	TimePoint timeout_;
-	TimerTimeOutHandler* const handler_;
+	TimerTimeOutHandler* handler_;
 
 public:
 	inline TimePoint getTimeout() const
@@ -65,6 +65,14 @@ public:
 	void kill() override
 	{
 		running_ = false;
+	}
+
+	// A killed timer's owner is done with it. At component teardown the owner may already
+	// be gone (components unload before the timer list is destroyed), so the destructor
+	// must not call back into it. See TimersComponent::~TimersComponent.
+	void detach()
+	{
+		handler_ = nullptr;
 	}
 
 	bool trigger() override
