@@ -13,6 +13,7 @@
 #include <netcode.hpp>
 #define _USE_MATH_DEFINES
 #include <math.h>
+#include <cmath>
 #include <algorithm>
 #include <cctype>
 #include "../npcs_impl.hpp"
@@ -2290,8 +2291,50 @@ void NPC::updateAimData(const Vector3& point, bool setAngle)
 	updateAimAngle_ = setAngle;
 }
 
+
+namespace
+{
+bool finiteVec(const Vector3& v)
+{
+	return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+bool finiteQuat(const GTAQuat& q)
+{
+	return std::isfinite(q.q.w) && std::isfinite(q.q.x) && std::isfinite(q.q.y) && std::isfinite(q.q.z);
+}
+}
+
+// A non-finite value in a sync packet is a client crash on every machine that streams
+// this ped ("Removed player N due to error"). Never let one out: fall back to the last
+// finite state, stand still, and say so once.
+bool NPC::sanitiseSyncState()
+{
+	bool clean = true;
+	if (!finiteVec(position_))
+	{
+		position_ = footSync_.Position;
+		clean = false;
+	}
+	if (!finiteQuat(rotation_))
+	{
+		rotation_ = footSync_.Rotation;
+		clean = false;
+	}
+	if (!finiteVec(velocity_))
+	{
+		velocity_ = Vector3(0.0f, 0.0f, 0.0f);
+		clean = false;
+	}
+	if (!clean)
+	{
+		noteAnomaly("non_finite_sync", "position/rotation/velocity reset to last finite state");
+	}
+	return clean;
+}
+
 void NPC::sendFootSync()
 {
+	sanitiseSyncState();
 	// Only send foot sync if player is spawned and on foot
 	// A foot packet sent after putInVehicle wins over the driver/passenger packet on
 	// remote clients and leaves the ped standing at the vehicle origin, with their legs
@@ -2380,6 +2423,7 @@ void NPC::sendDriverSync()
 	{
 		return;
 	}
+	sanitiseSyncState();
 
 	uint16_t upAndDown, leftAndRight, keys;
 	getKeys(upAndDown, leftAndRight, keys);

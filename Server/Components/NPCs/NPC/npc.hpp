@@ -338,6 +338,7 @@ public:
 	// The keys are stable so a log scan can count them.
 	void noteAnomaly(const char* key, const char* detail);
 	// Node playback chose something other than a plain forward link.
+	bool sanitiseSyncState();
 	void noteLinkTier(const char* tier, uint16_t fromPoint);
 
 	bool isNodeLinkTraversable(const NPCNode& sourceNode, uint16_t linkId, uint16_t fromPoint);
