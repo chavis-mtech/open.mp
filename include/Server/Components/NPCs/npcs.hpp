@@ -511,4 +511,22 @@ struct INPCComponent : public IPool<INPC>, public INetworkComponent
 
 	/// Get node information (vehicle nodes, pedestrian nodes, navigation nodes)
 	virtual bool getNodeInfo(int nodeId, uint32_t& vehicleNodes, uint32_t& pedNodes, uint32_t& naviNodes) = 0;
+
+	/// One outgoing link of a node point: the area (node file id) and point it leads to.
+	struct NodePointLink
+	{
+		uint16_t areaId;
+		uint16_t pointId;
+	};
+
+	/// Links leaving `pointId` of an open node, written to `out` (at most `max`).
+	/// Returns how many were written; 0 when the node is not open. Lets a gamemode route
+	/// over the game's own road graph instead of guessing from straight-line samples.
+	virtual int getNodePointLinks(int nodeId, uint16_t pointId, NodePointLink* out, int max) = 0;
+
+	/// Position of any point of an open node, without moving the node's cursor.
+	virtual bool getNodePointPositionAt(int nodeId, uint16_t pointId, Vector3& position) = 0;
+
+	/// Raw PathNode flags of any point of an open node, without moving the cursor.
+	virtual bool getNodePointFlagsAt(int nodeId, uint16_t pointId, uint32_t& flags) = 0;
 };
