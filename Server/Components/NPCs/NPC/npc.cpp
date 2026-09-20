@@ -237,6 +237,8 @@ void NPC::setPosition(const Vector3& pos, bool immediateUpdate)
 
 	// Setting position right after removing from vehicle because removeFromVehicle also sets position
 	position_ = pos;
+	// A teleport is not a journey: whatever road speed the NPC had belonged to where it was.
+	driveSpeed_ = 0.0f;
 
 	if (immediateUpdate)
 	{
@@ -588,6 +590,9 @@ void NPC::stopMove()
 	moveSpeed_ = 0.0f;
 	targetPosition_ = { 0.0f, 0.0f, 0.0f };
 	velocity_ = { 0.0f, 0.0f, 0.0f };
+	// A stopped car is stopped. Carrying road speed across a stop would have the next move
+	// start at whatever the last one ended at, including out of a stand-down or a teleport.
+	driveSpeed_ = 0.0f;
 	moveType_ = NPCMoveType_None;
 	stopRange_ = 0.2f;
 	followingPlayer_ = nullptr;
@@ -2683,19 +2688,38 @@ void NPC::advance(TimePoint now)
 	}
 	float distanceToTarget = glm::length(toTarget);
 	float driveHeadingError = 0.0f;
+	// Road speed belongs to a driver in a seat, and to nothing else. Enforcing that here,
+	// at the one place that reads it, is what makes it safe: every way out of a car -
+	// removeFromVehicle, a seat change, a mode change, an exit this code has not been
+	// taught about yet - lands on this check, so none of them can leave a stale speed for
+	// the next drive to start from. Note it deliberately does NOT key off distance: the
+	// target is momentarily under the bonnet at every waypoint, and zeroing there would
+	// make the car brake to a standstill at each node on its route.
+	if (moveType_ != NPCMoveType_Drive || !vehicle_ || vehicleSeat_ != 0)
+	{
+		driveSpeed_ = 0.0f;
+	}
 	if (moveType_ == NPCMoveType_Drive && vehicle_ && vehicleSeat_ == 0 && distanceToTarget > FLT_EPSILON)
 	{
 		// Driver movement used to replace the quaternion with the next node heading in
 		// move().  Every graph edge therefore looked like a vehicle being grabbed and
 		// rotated in place.  Steer the authoritative vehicle heading at a bounded rate and
 		// reduce speed for a tight corner, which produces a real arc between road links.
-		constexpr float MaxSteeringDegreesPerSecond = 105.0f;
+		// The rate is bounded by what the car's grip allows at the speed it is actually
+		// doing, not by a constant: a fixed 105 deg/s is the steering rack's limit at
+		// parking speed and roughly four times what any car can hold at 50 km/h.
+		const float steeringLimit = npc_navigation::steeringLimitDegreesPerSecond(driveSpeed_);
+		// The controls integrate over a bounded tick even when the server itself stalled.
+		// Position still moves by the real delta below; only the RATES are capped, so a
+		// hitch costs a few metres of straight line rather than a car snapping through
+		// 200 degrees in one frame.
+		const float controlTickSEC = npc_navigation::driveTickSeconds(deltaTimeSEC);
 		constexpr float SteeringDeadZoneDegrees = 1.5f;
 		const float desiredHeading = getAngleOfLine(toTarget.x, toTarget.y);
 		auto rotation = rotation_.ToEuler();
 		driveHeadingError = std::fmod(desiredHeading - rotation.z + 540.0f, 360.0f) - 180.0f;
-		const float headingStep = glm::clamp(driveHeadingError,
-			-MaxSteeringDegreesPerSecond * deltaTimeSEC, MaxSteeringDegreesPerSecond * deltaTimeSEC);
+		const float headingStep
+			= glm::clamp(driveHeadingError, -steeringLimit * controlTickSEC, steeringLimit * controlTickSEC);
 		rotation.z = std::fmod(rotation.z + headingStep + 360.0f, 360.0f);
 		// Level, explicitly. Pitch and roll are never set for a driven car, and a tilt that
 		// slipped in (a seat taken over a vehicle a client had rolled, quaternion round
@@ -2719,8 +2743,22 @@ void NPC::advance(TimePoint now)
 			leftAndRight_ = 0;
 		}
 
-		const float turnSpeedScale = glm::clamp(1.0f - std::abs(driveHeadingError) / 135.0f, 0.25f, 1.0f);
-		const float speedPerMillisecond = (moveSpeed_ / 100.0f) * turnSpeedScale;
+		// Carry the speed between ticks and move it toward what the bend allows at an
+		// acceleration a car can deliver. Rebuilding it from moveSpeed_ every tick, as this
+		// did, is what made a stationary car reach 36 km/h in one frame and shed a third of
+		// that in the next - the step changes players read as the vehicle being dragged
+		// along a rail rather than driven.
+		//
+		// The second cap is what keeps grip-limited steering safe. A car that cannot finish
+		// its turn before it reaches the node arrives outside the 10-degree arrival window,
+		// drives past, and has to come round the block; braking only once the bend is under
+		// the bonnet is too late. Capping the approach at the speed that leaves time to
+		// finish turning brakes for the corner instead of in it.
+		const float wantedMetresPerSecond
+			= std::min((moveSpeed_ * 10.0f) * npc_navigation::corneringSpeedScale(driveHeadingError),
+				npc_navigation::turnCompletionSpeedLimit(distanceToTarget, driveHeadingError, driveSpeed_));
+		driveSpeed_ = npc_navigation::approachDriveSpeed(driveSpeed_, wantedMetresPerSecond, deltaTimeSEC);
+		const float speedPerMillisecond = driveSpeed_ / 1000.0f;
 		const float headingRadians = glm::radians(rotation.z);
 		velocity_.x = -std::sin(headingRadians) * speedPerMillisecond;
 		velocity_.y = std::cos(headingRadians) * speedPerMillisecond;

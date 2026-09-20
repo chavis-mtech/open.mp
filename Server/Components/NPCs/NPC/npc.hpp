@@ -500,6 +500,10 @@ private:
 	Vector3 previousMoveStartPosition_;
 	bool hasPreviousLink_ = false;
 	TimePoint lastAnomalyLog_ {};
+	// A driver's road speed in metres per second, carried between ticks so acceleration and
+	// braking exist at all (see npc_navigation::approachDriveSpeed). Only advance() writes
+	// it; anything that stops or teleports the NPC puts it back to a standstill.
+	float driveSpeed_ = 0.0f;
 	Vector3 velocity_;
 	bool moving_;
 	bool needsVelocityUpdate_;

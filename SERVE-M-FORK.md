@@ -58,6 +58,40 @@ Expected to stay in the fork.
   like the car was grabbed and rotated in place. Here the heading slews at a bounded rate,
   speed drops for tight corners, and arrival additionally requires facing roughly the right
   way, which produces an arc between road links.
+- **A driven car has mass** — `advance()`, `setPosition()`, `stopMove()`, `driveSpeed_`,
+  and the drive block of `navigation_math.hpp`. The bounded-rate steering above still
+  rebuilt SPEED from `moveSpeed_` on every tick with no memory of the last one, so a parked
+  car was doing 36 km/h one frame later, shed a third of that the instant a bend appeared,
+  had it all back the instant the bend ended, and stopped dead on arrival. Players read the
+  result as the vehicle being position-locked, which is a fair description of a series of
+  step changes no car can make. Road speed is now state, carried between ticks and moved
+  toward what the bend allows at 4.2 m/s² under power and 7.5 m/s² braking; the steering
+  limit is the yaw rate the car's grip can buy at the speed it is actually doing
+  (`grip / speed`) rather than a flat 105 °/s, which was the steering rack's limit at
+  parking speed and roughly four times what any car holds at 50 km/h. The arithmetic is
+  pure and lives in `navigation_math.hpp`, tested from the monorepo in
+  `gamemode/tests/platform/NpcNavigationMathTest.cpp`.
+
+  Three guards go with it, because speed is STATE now and state can be left wrong:
+
+  - **The control tick is clamped** (`driveTickSeconds`, 200 ms). `advance()` integrates
+    over whatever wall time passed, so a server hitch handed the rate limits whole seconds
+    and they stopped limiting anything — 2 s of steering authority is 210° in one frame,
+    the exact artefact the bounded-rate steering exists to remove. Position still moves by
+    the real delta; only the rates are capped, so a hitch costs a few metres of straight
+    line instead of a car snapping round.
+  - **Speed is capped so the turn can finish** (`turnCompletionSpeedLimit`). Grip-limited
+    steering buys a failure the flat 105 °/s could not have: reaching a node still pointing
+    the wrong way. Arrival requires a driver within 10°, so such a car drove past, watched
+    the error grow to 180° and came round the block. The cap is the speed that leaves just
+    enough time to finish turning — it brakes for the corner rather than in it. It falls as
+    speed rises, so the loop converges rather than hunts, and it never returns zero (no
+    speed would mean no progress, so the error would never resolve).
+  - **Non-finite inputs cannot wedge a driver.** A NaN in the old stateless expression
+    lasted one tick; in `driveSpeed_` it would survive every clamp and stay for the session.
+    `advance()` also zeroes `driveSpeed_` whenever the NPC is not a driver in seat 0, which
+    is what makes every exit path — `removeFromVehicle`, a seat change, a mode change, one
+    not written yet — safe without each having to remember.
 - **Directional, lane-aware node traversal** — `node.cpp`, `node.hpp`, `changeNode()`,
   `updateNodePoint()`, `playNode()`. Follows link direction, treats point zero as valid,
   exhausts directional links, preserves paused destinations, and spreads drivers across the
